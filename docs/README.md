@@ -22,7 +22,7 @@ The scheduler component in this repository is the small public version of the on
 
 | Measure | Value |
 |---|---|
-| Active task lines in the task file | 125 (108 marked local, 17 allowed to call a model, 5 of those allowed during working hours); 6 disabled. Jobs registered in the scheduler database: 123. (The root README quotes 65 tasks, an earlier count.) |
+| Active task lines in the task file | 125 (108 marked local, 17 allowed to call a model, 5 of those allowed during working hours); 6 disabled. Jobs registered in the scheduler database: 123. |
 | Run records | 63,540 over 135 distinct task keys: 60,464 success, 146 error, 11 timeout, 2,919 skipped |
 | Error and timeout rate among executed runs | 0.26 % (157 of 60,621) |
 | Skipped share | 4.6 % |

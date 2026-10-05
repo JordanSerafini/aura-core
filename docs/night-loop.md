@@ -117,3 +117,15 @@ Task backlog on 2026-10-05: 993 tasks (813 done, 87 abandoned, 46 blocked, 44 pe
 ## What I would change
 
 Give every mission type a verification step that is not the mission itself before it is allowed to run more than a few times a night, and cap the reactive missions by distinct targets, not by count. Run the changed code's own tests inside the gate rather than after the merge.
+
+## Next: cost and efficiency
+
+The cost figures above stay as measured. The loop spends about 14 USD a night at list price for 39 % of missions with a verified effect, which is too much for that yield. The next piece of work is to bring that down and make each mission count:
+
+- stop re-running the error-fixing mission on the same target (87 of 218 runs, no verified effect), and cap reactive missions by distinct targets;
+- skip missions whose last runs had no effect until something in the target changes;
+- measure cost per verified effect, not cost per night, so the number I optimise is the one that matters;
+- use a cheaper model for triage and keep the larger one for work that has a test to pass.
+
+I will publish the before and after figures here once there are some.
+
