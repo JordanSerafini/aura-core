@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "description": "Synthetic, fictional corpus about an imaginary ferry company. Not real data.",
+  "documents": [
+    {
+      "id": "d01",
+      "title": "Weekday timetable",
+      "text": "The Kestrel ferry leaves Harbor Point at 07:15, 09:45 and 12:30 on weekdays. The crossing to Lowmere Island takes 38 minutes. Sunday service starts at 10:00."
+    },
+    {
+      "id": "d02",
+      "title": "Fares",
+      "text": "A single adult fare is 9.50 credits and a child under twelve travels for half price. Bicycles are carried free of charge. Monthly passes cost 120 credits."
+    },
+    {
+      "id": "d03",
+      "title": "Fog protocol",
+      "text": "When visibility drops below 200 metres the captain must reduce speed to six knots and sound the horn every two minutes. Crossings are suspended if the harbour master reports less than 50 metres."
+    },
+    {
+      "id": "d04",
+      "title": "Engine maintenance",
+      "text": "The port diesel engine on the Kestrel needs an oil and filter change every 250 running hours. The last overhaul of the turbocharger was completed in March."
+    },
+    {
+      "id": "d05",
+      "title": "Incident INC-4471",
+      "text": "Incident INC-4471: the bow thruster failed during docking at Lowmere on a Tuesday evening. No passengers were harmed. The cause was a corroded hydraulic hose, replaced the following morning."
+    },
+    {
+      "id": "d06",
+      "title": "Lost property",
+      "text": "Items left on board are kept at the Harbor Point ticket office for 30 days. Umbrellas and jackets are donated to a charity shop after that period."
+    },
+    {
+      "id": "d07",
+      "title": "Crew rota",
+      "text": "Deck crew work four days on and three days off. Shift swaps need approval from the duty officer at least 24 hours in advance."
+    },
+    {
+      "id": "d08",
+      "title": "New deckhand induction",
+      "text": "New deckhands complete a two-week induction: safety drill, knot tying, and passenger assistance training. They shadow an experienced sailor for ten crossings before working alone."
+    },
+    {
+      "id": "d09",
+      "title": "Refund policy",
+      "text": "Cancelled crossings are refunded in full within five working days. If the passenger cancels, a 10 percent fee applies unless the cancellation is made more than 48 hours ahead."
+    },
+    {
+      "id": "d10",
+      "title": "Accessibility",
+      "text": "Both ferries have a ramp and two wheelchair spaces on the main deck. Assistance dogs travel free. Staff can lower the ramp on request when boarding."
+    },
+    {
+      "id": "d11",
+      "title": "Fuel supply",
+      "text": "Marine diesel is supplied by Brightwater Fuels under a contract that renews each January. Deliveries arrive every second Thursday and the tank holds 18000 litres."
+    },
+    {
+      "id": "d12",
+      "title": "Online booking",
+      "text": "The online booking form is a small web application with a PostgreSQL database. Seat holds expire after ten minutes if payment is not completed."
+    },
+    {
+      "id": "d13",
+      "title": "Database backup",
+      "text": "The booking database is backed up nightly at 02:00 and the copy is kept for 14 days. A restore test is run on the first Monday of every month."
+    },
+    {
+      "id": "d14",
+      "title": "Summer promotion",
+      "text": "The summer promotion offers a two-for-one ticket on Wednesdays in July and August. The code SUMMER2X must be entered at checkout."
+    },
+    {
+      "id": "d15",
+      "title": "Weather limits",
+      "text": "Crossings are cancelled when sustained wind exceeds 45 knots or wave height is above three metres. The decision is taken by the captain together with the harbour master at 05:30."
+    },
+    {
+      "id": "d16",
+      "title": "Pier repair",
+      "text": "The east pier at Lowmere is closed for repairs until the end of October. Passengers disembark at the temporary floating pontoon, about two hundred metres from the village."
+    },
+    {
+      "id": "d17",
+      "title": "Onboard cafe",
+      "text": "The onboard cafe sells coffee, hot chocolate, cheese sandwiches and flapjacks. Card payments only, no cash. The kitchen closes thirty minutes before the last crossing."
+    },
+    {
+      "id": "d18",
+      "title": "Pets",
+      "text": "Dogs must be kept on a lead on the open deck. Cats and small animals travel in carriers. Pets are not allowed in the passenger lounge except assistance dogs."
+    },
+    {
+      "id": "d19",
+      "title": "Lifejackets",
+      "text": "Lifejackets are stored under the benches on the main deck, with child sizes in the orange locker near the stairs. Inspection is carried out every six months by the safety officer."
+    },
+    {
+      "id": "d20",
+      "title": "Radio procedures",
+      "text": "Bridge communications use VHF channel 12 for harbour traffic and channel 16 for emergencies. Radio checks are logged at the start of each shift."
+    },
+    {
+      "id": "d21",
+      "title": "Vessel capacity",
+      "text": "The Kestrel carries up to 140 passengers and 12 cars. The smaller Plover holds 60 passengers and no vehicles."
+    },
+    {
+      "id": "d22",
+      "title": "Vehicle booking",
+      "text": "Cars must be booked at least one day ahead. Vehicles taller than 2.4 metres cannot be carried because of the clearance on the ramp."
+    },
+    {
+      "id": "d23",
+      "title": "Complaint handling",
+      "text": "Complaints are acknowledged within two working days and answered in full within twenty. Serious safety complaints go straight to the operations manager."
+    },
+    {
+      "id": "d24",
+      "title": "Heritage volunteers",
+      "text": "A group of volunteers restores the 1952 steam launch Marigold every Saturday morning. Visitors can watch the work from the quay."
+    },
+    {
+      "id": "d25",
+      "title": "First aid",
+      "text": "All crew renew their first aid certificate every three years. A defibrillator is mounted next to the ticket window on each vessel."
+    },
+    {
+      "id": "d26",
+      "title": "Ticket scanners",
+      "text": "Handheld scanners validate QR tickets at the gangway. If the scanner has no signal, crew fall back to the printed manifest and tick passengers off by hand."
+    },
+    {
+      "id": "d27",
+      "title": "Hybrid retrofit",
+      "text": "The company is testing a battery-electric hybrid retrofit for the Plover. Shore charging at Harbor Point is planned to begin next spring."
+    },
+    {
+      "id": "d28",
+      "title": "Car park",
+      "text": "The Harbor Point car park has 80 spaces and costs 4 credits per day. Season parking is available to monthly pass holders at a discount."
+    },
+    {
+      "id": "d29",
+      "title": "Winter timetable notice",
+      "text": "From the first of November the last weekday departure moves from 19:30 to 18:45 because of shorter daylight."
+    },
+    {
+      "id": "d30",
+      "title": "Data privacy",
+      "text": "Passenger names collected at booking are deleted after 90 days. Payment card details are never stored by the company; they are handled by the payment provider."
+    }
+  ]
+}

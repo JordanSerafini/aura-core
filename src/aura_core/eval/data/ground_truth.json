@@ -1,0 +1,190 @@
+{
+  "version": 1,
+  "description": "Ground truth for corpus.json. Each question has the document(s) that answer it. Bump `version` whenever a question or a gold label changes.",
+  "questions": [
+    {
+      "id": "q01",
+      "question": "What time does the first ferry leave on weekdays?",
+      "relevant": [
+        "d01"
+      ],
+      "kind": "keyword"
+    },
+    {
+      "id": "q02",
+      "question": "How much does a child ticket cost?",
+      "relevant": [
+        "d02"
+      ],
+      "kind": "keyword"
+    },
+    {
+      "id": "q03",
+      "question": "How often does the engine oil need changing?",
+      "relevant": [
+        "d04"
+      ],
+      "kind": "keyword"
+    },
+    {
+      "id": "q04",
+      "question": "Where are lifejackets kept?",
+      "relevant": [
+        "d19"
+      ],
+      "kind": "keyword"
+    },
+    {
+      "id": "q05",
+      "question": "What happened in INC-4471?",
+      "relevant": [
+        "d05"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "id": "q06",
+      "question": "Which code gives the two-for-one summer deal?",
+      "relevant": [
+        "d14"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "id": "q07",
+      "question": "Which radio channel is for emergencies?",
+      "relevant": [
+        "d20"
+      ],
+      "kind": "keyword"
+    },
+    {
+      "id": "q08",
+      "question": "How often is the database copy tested?",
+      "relevant": [
+        "d13"
+      ],
+      "kind": "keyword"
+    },
+    {
+      "id": "q09",
+      "question": "Can I bring my bike?",
+      "relevant": [
+        "d02"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q10",
+      "question": "What happens when it is too windy to sail?",
+      "relevant": [
+        "d15"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q11",
+      "question": "I left my coat on the boat, how do I get it back?",
+      "relevant": [
+        "d06"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q12",
+      "question": "Is the boat suitable for someone in a wheelchair?",
+      "relevant": [
+        "d10"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q13",
+      "question": "How long do I wait for my money back after the company calls off a trip?",
+      "relevant": [
+        "d09"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q14",
+      "question": "How are customer records protected and when are they erased?",
+      "relevant": [
+        "d30"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q15",
+      "question": "What should the skipper do when visibility is poor?",
+      "relevant": [
+        "d03"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q16",
+      "question": "How long does the training last for new sailors?",
+      "relevant": [
+        "d08"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q17",
+      "question": "Can I take a lorry across?",
+      "relevant": [
+        "d22"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q18",
+      "question": "Where do I get off while the jetty is being fixed?",
+      "relevant": [
+        "d16"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q19",
+      "question": "What is the plan for greener propulsion?",
+      "relevant": [
+        "d27"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q20",
+      "question": "What do crew do when the ticket reader cannot connect?",
+      "relevant": [
+        "d26"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q21",
+      "question": "How many people fit on the big boat?",
+      "relevant": [
+        "d21"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q22",
+      "question": "Who looks after the old steam boat?",
+      "relevant": [
+        "d24"
+      ],
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q23",
+      "question": "How long are seats reserved before payment goes through?",
+      "relevant": [
+        "d12"
+      ],
+      "kind": "paraphrase"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aura-core"
+version = "0.1.0"
+description = "Hybrid (BM25 + vector) memory store, retrieval benchmark and a markdown-driven task scheduler, extracted from a personal agent project"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Jordan Serafini" }]
+requires-python = ">=3.10"
+dependencies = [
+  "sqlite-vec>=0.1.6",
+  "apscheduler>=3.10,<4",
+]
+
+[project.optional-dependencies]
+# Real embedding model (downloads weights on first use).
+st = ["sentence-transformers>=3"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+aura-core-eval = "aura_core.eval.bench:main"
+aura-core-heartbeat = "aura_core.heartbeat.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"aura_core.eval" = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
