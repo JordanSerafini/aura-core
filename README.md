@@ -101,6 +101,17 @@ Grammar (`## Every 5 minutes`, `## Daily at 08:30`, `## Weekly on friday at 17:4
 - `secret_redact` is pattern based. It reduces the chance of indexing a credential, it does not guarantee it.
 - Extracted from a larger personal project: some design choices only make sense in that context.
 
+## Beyond this repo
+
+Four other parts of the private system are documented as short case studies in [`docs/`](docs/README.md), with diagrams, design decisions, measured figures and failures:
+
+- [Proactive signals](docs/proactive.md): suggestions and bubbles that speak first, and how they learn to stop.
+- [The nightly loop](docs/night-loop.md): autonomous overnight sessions with a review step that does not use a model.
+- [The notes vault](docs/vault.md): Markdown notes that scripts and sessions keep current.
+- [Phone app, watch app and desktop mascot](docs/mobile-and-mascot.md): three clients on one server.
+
+The code for these parts stays private. Nothing in `docs/` can be run from this repository, and every figure there is from the origin private instance with its measurement date.
+
 ## License
 
 MIT, see `LICENSE`.
