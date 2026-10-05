@@ -12,7 +12,7 @@ This repo is a clean extraction, not the whole system. It has no history from th
 
 The benchmark is the part I care about most. In the original project it was used to test retrieval ideas that looked obvious on paper. Several did not beat the existing setup once measured, and were dropped. The lesson I kept: write the questions and the answers down first, then change the retrieval.
 
-Figures from the private instance (not reproducible from this repo): about 9.4k indexed chunks, hybrid BM25 + vector retrieval, 65 recurring tasks scheduled from one markdown file.
+Figures from the private instance (not reproducible from this repo): about 9.4k indexed chunks, hybrid BM25 + vector retrieval, 125 active task lines scheduled from one markdown file (measured 2026-10-05).
 
 ## Layout
 
