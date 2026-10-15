@@ -85,6 +85,7 @@ Read this carefully: the hashing embedder is a bag of hashed words, not a langua
 ## Scheduler
 
 ```
+aura-core-heartbeat --file HEARTBEAT.md init -t watchdog       # starter file: minimal | watchdog | nightly
 aura-core-heartbeat --file examples/HEARTBEAT.md list      # parsed tasks and warnings
 aura-core-heartbeat --file examples/HEARTBEAT.md once      # run everything once
 aura-core-heartbeat --file examples/HEARTBEAT.md run       # start the scheduler

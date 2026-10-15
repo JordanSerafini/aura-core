@@ -1,4 +1,4 @@
-"""Command line: list, once, run, history."""
+"""Command line: init, list, once, run, history."""
 
 import argparse
 import sys
@@ -6,6 +6,7 @@ from pathlib import Path
 
 from aura_core.heartbeat.parser import parse_heartbeat
 from aura_core.heartbeat.runner import HeartbeatRunner, RunHistory, run_once
+from aura_core.heartbeat.templates import TEMPLATES
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -14,6 +15,9 @@ def main(argv: list[str] | None = None) -> int:
   parser.add_argument("--db", help="history database (default: $AURA_CORE_HOME/heartbeat.db)")
   parser.add_argument("--allow-tokens", action="store_true", help="also run tasks marked [tokens]")
   sub = parser.add_subparsers(dest="cmd", required=True)
+  init = sub.add_parser("init", help="write a starter task file from a template (to --file)")
+  init.add_argument("--template", "-t", choices=sorted(TEMPLATES), default="minimal")
+  init.add_argument("--force", action="store_true", help="overwrite an existing file")
   sub.add_parser("list", help="show the parsed tasks and parse warnings")
   sub.add_parser("once", help="run every task once now, in file order, then exit")
   run = sub.add_parser("run", help="start the scheduler (Ctrl-C to stop)")
@@ -26,6 +30,16 @@ def main(argv: list[str] | None = None) -> int:
     for r in RunHistory(args.db).recent(args.n):
       print(f"{r['started_at']}  {r['status']:<18} {r['duration_s']:>7.2f}s  {r['task_id']}")
     return 0
+
+  if args.cmd == "init":
+    target = Path(args.file)
+    if target.exists() and not args.force:
+      print(f"{target} already exists (use --force to overwrite)", file=sys.stderr)
+      return 2
+    target.write_text(TEMPLATES[args.template], encoding="utf-8")
+    tasks = parse_heartbeat(target)
+    print(f"wrote {target} ({args.template}, {len(tasks)} task(s))")
+    return 0 if not tasks.errors else 1
 
   if not Path(args.file).exists():
     print(f"no such file: {args.file}", file=sys.stderr)
