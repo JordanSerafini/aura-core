@@ -41,6 +41,13 @@ def test_nothing_is_repeated_within_a_session(db):
   assert first and not again and other
 
 
+def test_purge_keeps_current_session(db):
+  seen = {f"old{i}": set() for i in range(80)}
+  first = prompt_selection("ferry timetable weekday departures", "s1", db=db, seen=seen)
+  again = prompt_selection("ferry timetable weekday departures", "s1", db=db, seen=seen)
+  assert first and not again
+
+
 def test_abstains_without_subject(db):
   assert prompt_selection("ok continue", "s1", db=db) == []
 

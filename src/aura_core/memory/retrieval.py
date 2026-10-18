@@ -158,9 +158,13 @@ def prompt_selection(prompt: str, session_id: str, *, db, embedder: Callable[[st
     meta.setdefault(row[0], row)
   ordered = [meta[rid] for rid, _ in sorted(scores.items(), key=lambda kv: -kv[1])]
 
-  if len(seen) > 80:  # naive purge: the process may live for weeks
+  key = session_id or "?"
+  if len(seen) > 80:  # the process may live for weeks: forget old sessions, never the current one
+    current = seen.get(key)
     seen.clear()
-  injected = seen.setdefault(session_id or "?", set())
+    if current is not None:
+      seen[key] = current
+  injected = seen.setdefault(key, set())
   picked, seen_sources = [], set()
   for rowid, ctype, source, extract in ordered:
     if rowid in injected or source in seen_sources:
