@@ -52,7 +52,9 @@ def validate(corpus: dict, truth: dict) -> list[str]:
   """Return problems in the ground truth (an unknown gold id makes a question unanswerable)."""
   ids = {d["id"] for d in corpus["documents"]}
   problems = []
-  for q in truth["questions"]:
+  if not truth.get("questions"):
+    problems.append("ground truth has no question: nothing to score")  # score() would divide by zero
+  for q in truth.get("questions", []):
     if not q["relevant"]:
       problems.append(f"{q['id']}: no relevant document")
     problems += [f"{q['id']}: unknown document {r}" for r in q["relevant"] if r not in ids]
@@ -146,6 +148,10 @@ def main(argv: list[str] | None = None) -> int:
   if args.truth:
     truth = json.loads(Path(args.truth).read_text(encoding="utf-8"))
   embedder, label = pick_embedder(args.embedder)
+  if args.rerank and embedder is None:
+    # The cross-encoder reranks the hybrid pool, which needs vectors: say so instead of dropping the path silently.
+    print(f"warning: --rerank ignored, the {label} embedder has no vectors (use --embedder hashing or st)",
+          file=sys.stderr)
   results = run(corpus, truth, embedder, rerank=args.rerank)
 
   digest = hashlib.sha256(json.dumps(truth, sort_keys=True).encode()).hexdigest()[:10]

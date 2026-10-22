@@ -62,3 +62,16 @@ def test_cli_json_output(capsys):
   payload = json.loads(capsys.readouterr().out)
   assert payload["embedder"] == "lexical" and "fts" in payload["results"]
   assert payload["questions"] == len(bench.load_bundled()[1]["questions"])
+
+
+def test_empty_ground_truth_is_refused_not_divided_by_zero(data):
+  corpus, truth = data
+  empty = {**truth, "questions": []}
+  assert any("no question" in p for p in bench.validate(corpus, empty))
+  with pytest.raises(ValueError):
+    bench.run(corpus, empty)
+
+
+def test_rerank_without_vectors_is_reported(capsys):
+  bench.main(["--embedder", "lexical", "--rerank", "--json"])
+  assert "--rerank ignored" in capsys.readouterr().err

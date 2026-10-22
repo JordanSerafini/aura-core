@@ -28,7 +28,7 @@ src/aura_core/
   heartbeat/   parser.py, models.py  HEARTBEAT.md grammar
                runner.py, cli.py     APScheduler runner + history
 examples/HEARTBEAT.md                harmless sample task file
-tests/                               65 tests
+tests/                               pytest suite
 ```
 
 ## Install
