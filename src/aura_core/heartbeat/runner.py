@@ -159,13 +159,21 @@ def sync_jobs(scheduler: BaseScheduler, tasks: list[ScheduledTask], history: Run
     if job.id != RELOAD_JOB_ID and job.id not in wanted:
       job.remove()
       removed += 1
+  changed = 0
   for task in wanted.values():
+    # An unchanged task keeps its job: replacing it restarted its IntervalTrigger, so an hourly task in a file
+    # edited every 30 minutes never ran (review of 18/10).
+    job = scheduler.get_job(task.task_id)
+    if (job is not None and not run_on_start and list(job.args[:1]) == [task]
+        and job.kwargs.get("allow_tokens") == allow_tokens):
+      continue
     extra = {"next_run_time": datetime.now() + timedelta(seconds=1)} if run_on_start else {}
     scheduler.add_job(
       execute_task, trigger=build_trigger(task), args=[task, history], kwargs={"allow_tokens": allow_tokens},
       id=task.task_id, name=task.command, replace_existing=True, **extra,
     )
-  return len(wanted), removed
+    changed += 1
+  return changed, removed
 
 
 class HeartbeatRunner:

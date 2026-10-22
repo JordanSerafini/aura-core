@@ -79,8 +79,24 @@ def test_sync_jobs_builds_the_right_triggers_and_prunes(history):
   assert isinstance(jobs["echo a"].trigger, IntervalTrigger) and jobs["echo a"].trigger.interval_length == 300
   assert isinstance(jobs["echo b"].trigger, CronTrigger) and isinstance(jobs["echo c"].trigger, CronTrigger)
   assert "day_of_week='4'" in str(jobs["echo c"].trigger)
-  assert sync_jobs(sched, tasks[:1], history) == (1, 2)  # file edited: two tasks removed
+  assert sync_jobs(sched, tasks[:1], history) == (0, 2)  # file edited: two tasks removed, the kept one untouched
   assert len(sched.get_jobs()) == 1
+  sched.shutdown(wait=False)
+
+
+def test_sync_jobs_keeps_the_schedule_of_unchanged_tasks(history):
+  sched = BackgroundScheduler()
+  sched.start(paused=True)
+  text = "## Every 1 hour\n- [ ] `echo a` -- x\n"
+  sync_jobs(sched, parse_text(text), history)
+  job = sched.get_jobs()[0]
+  first = job.next_run_time
+  time.sleep(1.1)
+  # The file is edited elsewhere (new task): the hourly job must not be pushed back.
+  assert sync_jobs(sched, parse_text(text + "- [ ] `echo b` -- y\n"), history) == (1, 0)
+  assert sched.get_job(job.id).next_run_time == first
+  # A real change of the task (new interval) does replace it.
+  assert sync_jobs(sched, parse_text("## Every 2 hours\n- [ ] `echo a` -- x\n"), history)[0] == 1
   sched.shutdown(wait=False)
 
 
