@@ -1,4 +1,4 @@
-"""Ambient recall: pick 2-3 short memory extracts relevant to a prompt.
+"""Ambient recall: pick up to 2 short memory extracts relevant to a prompt.
 
 Designed for injecting context into an agent prompt, where a wrong or
 tangential extract is worse than none. Hence the abstentions:
@@ -10,7 +10,20 @@ tangential extract is worse than none. Hence the abstentions:
   words (a single shared word is a coincidence, not a memory); chunks found by
   the vector side are exempt;
 - each chunk is given at most once per session, and at most one extract per
-  source file, so three extracts are three different pieces of information.
+  source file, so two extracts are two different pieces of information;
+- index files (a list of links, like a `MEMORY.md`) are never injected, and
+  dated journals or notes older than `old_days` only when BOTH sides found them.
+
+Measured on 60 real prompts hand-graded extract by extract: 37 % relevant with
+3 extracts; the 3rd was relevant 25 % of the time, notes older than 60 days
+10 %, index files 0 %, a chunk found by both sides 71 %. With the rules above:
+45 %. Filtering alone gains little (a mediocre extract replaces another one):
+the number injected is what matters.
+
+A short prompt ("where is the export at?") rarely carries its subject; the
+previous assistant reply usually does. `conversation_context()` builds that
+context and `prompt_selection(context=...)` adds it to the vector side only, so
+an explicit subject in the prompt still wins through the keyword side.
 
 Both rankings (BM25 and vector k-NN) are fused by Reciprocal Rank Fusion.
 `embedder` is a callable `str -> list[float]`; without it, keyword side only.
@@ -34,6 +47,29 @@ which where while your just into over also than them they their been were does
 
 DEFAULT_TYPES = ("topic", "note")
 RRF_K = 60
+MAX_INJECT = 2
+INDEX_FILES = frozenset({"MEMORY.md"})
+OLD_DAYS = 90
+JOURNAL_RE = re.compile(r"\d{4}-\d\d-\d\d(?:-weekly)?\.md$")
+CONTEXT_MAX_WORDS = 12
+CONTEXT_CHARS = 300
+_SUGGEST = re.compile(r"\[(?:SUGGEST|PROPOSE)[^\]]*\]")
+
+
+def conversation_context(prompt: str, previous_reply: str) -> str:
+  """Head and tail of the previous assistant reply when the prompt is short; '' otherwise.
+
+  Hand-graded on the 26 prompts of 12 words or fewer: relevant extracts 16/34 ->
+  20/33 on the 18 whose selection changes, prompts with a useful extract 11 -> 15.
+  """
+  if not previous_reply or len(prompt.split()) > CONTEXT_MAX_WORDS:
+    return ""
+  text = " ".join(_SUGGEST.sub(" ", previous_reply).split())
+  if not text:
+    return ""
+  if len(text) <= 2 * CONTEXT_CHARS:
+    return text
+  return f"{text[:CONTEXT_CHARS]} ... {text[-CONTEXT_CHARS:]}"
 
 
 # One word pattern for the prompt and for the coverage count: two different ranges, plus SQLite's ASCII-only
@@ -102,8 +138,10 @@ def semantic_rows(db, prompt: str, embedder: Callable[[str], list[float]] | None
 
 def prompt_selection(prompt: str, session_id: str, *, db, embedder: Callable[[str], list[float]] | None = None,
                      types: Iterable[str] = DEFAULT_TYPES, seen: dict | None = None,
-                     timing: dict | None = None) -> list[tuple]:
-  """Return up to 3 `(rowid, type, source, extract)` tuples, or `[]` to abstain."""
+                     timing: dict | None = None, limit: int = MAX_INJECT,
+                     context: str = "", index_files: frozenset = INDEX_FILES,
+                     old_days: float = OLD_DAYS) -> list[tuple]:
+  """Return up to `limit` `(rowid, type, source, extract)` tuples, or `[]` to abstain."""
   timing = timing if timing is not None else {}
   seen = seen if seen is not None else {}
   types = tuple(types)
@@ -151,7 +189,7 @@ def prompt_selection(prompt: str, session_id: str, *, db, embedder: Callable[[st
   finally:
     timing["fts_ms"] = (time.perf_counter() - t_fts) * 1000
 
-  sem_rows = semantic_rows(db, prompt, embedder, types, timing, limit=6)
+  sem_rows = semantic_rows(db, f"{prompt}\n\n{context}" if context else prompt, embedder, types, timing, limit=6)
   sem_ids = {r[0] for r in sem_rows}
   scores: dict[int, float] = {}
   meta: dict[int, tuple] = {}
@@ -162,6 +200,14 @@ def prompt_selection(prompt: str, session_id: str, *, db, embedder: Callable[[st
     scores[row[0]] = scores.get(row[0], 0.0) + 1.0 / (RRF_K + rank)
     meta.setdefault(row[0], row)
   ordered = [meta[rid] for rid, _ in sorted(scores.items(), key=lambda kv: -kv[1])]
+  mtimes: dict[int, float] = {}
+  if scores:
+    try:
+      with sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.5) as conn:
+        ph = ",".join("?" * len(scores))
+        mtimes = dict(conn.execute(f"SELECT rowid, mtime FROM chunks WHERE rowid IN ({ph})", list(scores)))
+    except sqlite3.Error:
+      mtimes = {}
 
   key = session_id or "?"
   if len(seen) > 80:  # the process may live for weeks: forget old sessions, never the current one
@@ -176,12 +222,20 @@ def prompt_selection(prompt: str, session_id: str, *, db, embedder: Callable[[st
       continue
     if rowid not in sem_ids and covers.get(rowid, 0) < 2:
       continue
+    name = str(source).rsplit("/", 1)[-1]
+    if name in index_files:
+      continue
+    both = rowid in sem_ids and covers.get(rowid, 0) >= 2
+    mt = mtimes.get(rowid)
+    old = bool(mt) and (time.time() - float(mt)) / 86400 > old_days
+    if not both and (old or JOURNAL_RE.search(name)):
+      continue
     extract = " ".join((extract or "").split())[:170]
     if not extract:
       continue
     seen_sources.add(source)
     injected.add(rowid)
     picked.append((rowid, ctype, source, extract))
-    if len(picked) >= 3:
+    if len(picked) >= limit:
       break
   return picked

@@ -21,7 +21,7 @@ src/aura_core/
   memory/      sqlite_vec_store.py   store: chunks, FTS5, vec0, RRF fusion
                embed_engine.py       embedders (sentence-transformers, hashing)
                reranker.py           optional cross-encoder
-               retrieval.py          ambient recall: 2-3 short extracts for a prompt, abstains when unsure
+               retrieval.py          ambient recall: up to 2 short extracts for a prompt, abstains when unsure
                secret_redact.py      masks credential-looking values before indexing
   eval/        bench.py              the benchmark
                data/                 synthetic corpus (30 docs) + ground truth (23 questions)
