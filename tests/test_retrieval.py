@@ -1,7 +1,7 @@
 import pytest
 
 from aura_core.memory.embed_engine import HashingEmbedder
-from aura_core.memory.retrieval import prompt_selection
+from aura_core.memory.retrieval import conversation_context, prompt_selection
 from aura_core.memory.sqlite_vec_store import SqliteVecStore
 
 EMB = HashingEmbedder(dim=64)
@@ -83,3 +83,39 @@ def test_accented_words_count_toward_coverage(tmp_path):
   store.close()
   picked = prompt_selection("écluse cœur", "s1", db=path)
   assert picked and picked[0][2] == "ecluse.md"
+
+
+def _store(tmp_path, docs):
+  path = tmp_path / "x.db"
+  store = SqliteVecStore(path, dim=EMB.dim)
+  store.add_documents(docs, EMB, type_="topic")
+  store.close()
+  return path
+
+
+def test_at_most_two_extracts_by_default(tmp_path):
+  path = _store(tmp_path, [
+    {"id": str(i), "content": f"Lifejackets inspection report number {i} by the safety officer",
+     "source": f"report{i}.md"} for i in range(5)])
+  assert len(prompt_selection("lifejackets inspection safety", "s", db=path, embedder=EMB)) == 2
+
+
+def test_index_files_old_notes_and_journals_need_both_sides(tmp_path):
+  import time
+  path = _store(tmp_path, [
+    {"id": "1", "content": "Lifejackets inspection links list", "source": "MEMORY.md"},
+    {"id": "2", "content": "Lifejackets inspection done last spring", "source": "old.md",
+     "mtime": time.time() - 200 * 86400},
+    {"id": "3", "content": "Lifejackets inspection noted in the journal", "source": "2026-01-02.md"},
+  ])
+  # keyword side only (no embedder): none of them qualifies
+  assert prompt_selection("lifejackets inspection", "s", db=path) == []
+
+
+def test_short_prompt_takes_its_subject_from_the_previous_reply(db):
+  ctx = conversation_context("where is it at?", "The ferry timetable export is running. [SUGGEST: ok]")
+  assert "timetable" in ctx and "SUGGEST" not in ctx
+  assert conversation_context(" ".join(["word"] * 13), "timetable") == ""
+  timing = {}
+  prompt_selection("where is the export at", "s", db=db, embedder=EMB, context=ctx, timing=timing)
+  assert timing["embed_ms"] >= 0
