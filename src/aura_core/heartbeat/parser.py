@@ -149,4 +149,10 @@ def parse_text(text: str) -> ParsedTasks:
     counts[task.task_id] = counts.get(task.task_id, 0) + 1
     if counts[task.task_id] > 1:
       task.task_id = f"{task.task_id}-{counts[task.task_id]}"
+  # A [depends:x] that names no task is skipped at every run, forever and silently (review of 18/10): report it.
+  # It is an error like the others, so `list` and `init` exit 1 and the runner prints it at each reload.
+  known = {t.task_id for t in tasks} | {command_stem(t.command) for t in tasks}
+  for task in tasks:
+    if task.depends_on and task.depends_on not in known:
+      tasks.errors.append(f"dependency target not found: [depends:{task.depends_on}] in {task.command}")
   return tasks
