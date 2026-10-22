@@ -21,6 +21,14 @@ def test_assignments_and_bearer_and_url_credentials():
   assert "app:" in redact("postgres://app:s3cretpw@db.internal/x")  # structure kept
 
 
+def test_auth_and_credential_names_are_masked_like_password():
+  for text in ("auth=hunter22secret", "SMTP_AUTH: hunter22secret", "credential: hunter22secret",
+               "db_credentials=hunter22secret", "smtpCredential=hunter22secret"):
+    assert "hunter22secret" not in redact(text), text
+  for text in ("oauth = enabled", "author=Jordan", "oAuth: enabled", "authentication is required"):
+    assert redact(text) == text, text
+
+
 def test_pem_block_masked():
   pem = "-----BEGIN " + "PRIVATE KEY-----\nMIIabc\n-----END " + "PRIVATE KEY-----"
   assert "MIIabc" not in redact(f"before\n{pem}\nafter")

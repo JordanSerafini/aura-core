@@ -38,10 +38,12 @@ _PREFIXED = re.compile(
 _BEARER = re.compile(r"(?i)(?P<key>\bBearer\s+)(?P<val>[A-Za-z0-9._~+/=-]{12,})")
 _URL_CREDENTIAL = re.compile(r"(?P<key>\b[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@'\"]+:)(?P<val>[^\s@/'\"]+)(?=@)")
 # The credential word must be a whole name segment (`api_key`, `DB_PASSWORD`,
-# `apiKey`), so "monkey" or "tokenizer" do not trigger it.
+# `apiKey`), so "monkey" or "tokenizer" do not trigger it. Same words as
+# _CREDENTIAL_NAME: `auth=` and `credential:` used to slip through. `Auth` is not
+# a camelCase suffix on purpose, so "oAuth: enabled" stays readable.
 _ASSIGNMENT = re.compile(
   r"(?i)(?P<key>\b(?:[A-Za-z0-9]+[_.-])*"
-  r"(?:(?:key|token|secret|password|passwd|pwd)|(?-i:[a-z0-9]+(?:Key|Token|Secret|Password)))"
+  r"(?:(?:key|token|secret|password|passwd|pwd|credentials?|auth)|(?-i:[a-z0-9]+(?:Key|Token|Secret|Password|Credentials?)))"
   r"(?:[_.-][A-Za-z0-9]+)*\s*[:=]\s*)(?P<val>'[^'\n]+'|\"[^\"\n]+\"|[^\s'\";,]+)"
 )
 
