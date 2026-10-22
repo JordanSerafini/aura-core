@@ -36,11 +36,16 @@ DEFAULT_TYPES = ("topic", "note")
 RRF_K = 60
 
 
+# One word pattern for the prompt and for the coverage count: two different ranges, plus SQLite's ASCII-only
+# lower(), made "Œuvre"/"Écluse" count as 0 covered words and dropped good extracts (review of 18/10).
+_WORD = re.compile(r"[a-zA-ZÀ-ſ0-9_-]{3,}")
+
+
 def _tokens(prompt: str, limit: int = 8) -> list[str]:
   # Min length 3, not 4: 3-letter acronyms are the most discriminating terms
   # (highest IDF) in a technical corpus and a threshold of 4 would drop them all.
   seen, out = set(), []
-  for w in re.findall(r"[a-zA-ZÀ-ſ0-9_-]{3,}", prompt.lower()):
+  for w in _WORD.findall(prompt.lower()):
     if w in STOPWORDS or w in seen:
       continue
     seen.add(w)
@@ -136,8 +141,8 @@ def prompt_selection(prompt: str, session_id: str, *, db, embedder: Callable[[st
       ids_ = [r[0] for r in fts_rows]
       if ids_:
         ph = ",".join("?" * len(ids_))
-        for rid, content in conn.execute(f"SELECT rowid, lower(content) FROM chunks WHERE rowid IN ({ph})", ids_):
-          words = set(re.findall(r"[a-z0-9à-ÿ_-]{3,}", content or ""))
+        for rid, content in conn.execute(f"SELECT rowid, content FROM chunks WHERE rowid IN ({ph})", ids_):
+          words = set(_WORD.findall((content or "").lower()))
           covers[rid] = sum(1 for t in tokens if t in words)
     finally:
       conn.close()
