@@ -5,8 +5,8 @@ prototypes). For persistent storage and RRF fusion over SQLite, see
 `SqliteVecStore.search_hybrid`.
 
 Scoring here is a weighted sum of max-normalised BM25 and cosine similarity,
-not RRF. The two engines are kept side by side on purpose so they can be
-compared on the same questions.
+not RRF. Nothing in the package calls it and `eval/` does not benchmark it:
+it is a standalone helper, covered by tests/test_helpers.py only.
 """
 
 import math
