@@ -70,3 +70,16 @@ def test_vector_side_rescues_a_chunk_and_types_are_respected(db):
   picked = prompt_selection("radio channel twelve", "s2", db=db, types=("vault",),
                             embedder=lambda t: EMB.embed([t])[0])
   assert picked and picked[0][1] == "vault"
+
+
+def test_accented_words_count_toward_coverage(tmp_path):
+  # "Écluse" (accent initial, lower() de SQLite ne le touche pas) et "cœur" (hors de l'ancienne plage à-ÿ).
+  path = tmp_path / "accents.db"
+  store = SqliteVecStore(path, dim=EMB.dim)
+  store.add_documents([
+    {"id": "1", "content": "Écluse du cœur système : vanne manuelle au niveau deux", "source": "ecluse.md"},
+    {"id": "2", "content": "Horaires du bac entre les deux rives", "source": "bac.md"},
+  ], EMB, type_="topic")
+  store.close()
+  picked = prompt_selection("écluse cœur", "s1", db=path)
+  assert picked and picked[0][2] == "ecluse.md"
