@@ -102,3 +102,14 @@ def test_bundled_example_parses_cleanly():
   example = Path(__file__).resolve().parent.parent / "examples" / "HEARTBEAT.md"
   tasks = parse_heartbeat(example)
   assert not tasks.errors and len(tasks) == 6
+
+
+def test_dependency_without_target_is_reported():
+  tasks = parse_text("""## Every 5 minutes
+- [ ] `python3 /x/backup.py` -- x
+- [ ] `python3 /x/report.py` -- [depends:backup] stem ok
+- [ ] `python3 /x/sync.py` -- [depends:nothing-like-this] missing
+""")
+  assert len(tasks) == 3  # still scheduled: the runner gates it, the file author is told
+  assert [e for e in tasks.errors if "dependency target not found" in e] == [
+    "dependency target not found: [depends:nothing-like-this] in python3 /x/sync.py"]
