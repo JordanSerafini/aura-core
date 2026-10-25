@@ -19,3 +19,6 @@ venv/
 *.sqlite3
 *.log
 .aura_core/
+
+# Claude Code local (agent worktrees)
+/.claude/
