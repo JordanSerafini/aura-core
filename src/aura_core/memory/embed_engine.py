@@ -50,8 +50,8 @@ class SentenceTransformerEmbedder:
       from sentence_transformers import SentenceTransformer
     except ImportError as exc:  # pragma: no cover - depends on the environment
       raise RuntimeError(
-        "sentence-transformers is not installed; use `pip install aura-core[st]` "
-        "or the lexical-only mode"
+        "sentence-transformers is not installed; use `pip install -e \".[st]\"` from a checkout "
+        "(or `pip install sentence-transformers`), or the lexical-only mode"
       ) from exc
     return SentenceTransformer(
       self.model_name,

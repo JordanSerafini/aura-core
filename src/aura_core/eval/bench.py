@@ -15,8 +15,8 @@ Embedders (`--embedder`):
   lexical    no embedder: only the fts path runs. Always works offline.
   hashing    deterministic hashed bag-of-words. NOT semantic; it only
              exercises the vector code path with no download.
-  st         sentence-transformers (`pip install aura-core[st]`), downloads
-             weights on first use.
+  st         sentence-transformers (`pip install -e ".[st]"` from a checkout),
+             downloads weights on first use.
   auto       (default) `st` if installed and loadable, else `lexical`.
 
 Metrics: recall@3 = share of questions whose gold document is in the top 3.
