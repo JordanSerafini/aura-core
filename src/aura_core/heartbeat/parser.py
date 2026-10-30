@@ -34,7 +34,7 @@ from aura_core.heartbeat.models import (
 _INTERVAL = re.compile(r"^##\s+Every\s+(\d+)\s+(hour|hours|minute|minutes|min|h|m|d|day|days)\s*$", re.I)
 _DAILY = re.compile(r"^##\s+Daily\s+at\s+(\d{1,2}):(\d{2})\s*$", re.I)
 _WEEKLY = re.compile(r"^##\s+Weekly\s+on\s+(\w+)\s+at\s+(\d{1,2}):(\d{2})\s*$", re.I)
-_EVENT = re.compile(r"^##\s+On\s+event:\s+(\w+)\s*$", re.I)
+_EVENT = re.compile(r"^##\s+On\s+event:\s*\S.*$", re.I)
 _TASK = re.compile(r"^-\s+\[[xX\s]*\]\s+`([^`]+)`\s+--\s+(.+)$")
 _TASK_CANDIDATE = re.compile(r"^-\s+\[[xX\s]*\]\s+`")
 _HEADING = re.compile(r"^#{1,6}(?:\s|$)")
@@ -98,7 +98,7 @@ def parse_text(text: str) -> ParsedTasks:
         schedule = {"type": "weekly", "value": f"{day} {hour:02d}:{minute:02d}",
                     "weekday": _DAYS[day], "hour": hour, "minute": minute}
       continue
-    if m := _EVENT.match(line):
+    if _EVENT.match(line):
       tasks.errors.append(f"event schedules are not supported by this runner: {line}")
       schedule = None
       continue

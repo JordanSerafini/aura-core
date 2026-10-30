@@ -67,6 +67,13 @@ def test_bad_input_is_reported_not_raised():
     assert needle in joined, needle
 
 
+def test_event_names_with_dashes_dots_or_spaces_get_the_event_message():
+  for name in ("deploy-done", "file.changed", "deploy done"):
+    errors = parse_text(f"## On event: {name}\n- [ ] `echo x` -- y\n").errors
+    assert any("event schedules" in e for e in errors), (name, errors)
+    assert not any("unknown schedule heading" in e for e in errors), (name, errors)
+
+
 def test_task_before_any_heading_and_after_a_plain_heading():
   tasks = parse_text("- [ ] `echo orphan` -- nope\n## Every 1 hour\n## Notes\n- [ ] `echo x` -- nope\n")
   assert len(tasks) == 0 and len(tasks.errors) == 2
