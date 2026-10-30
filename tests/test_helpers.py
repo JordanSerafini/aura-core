@@ -1,7 +1,9 @@
 import sqlite3
 
+import pytest
+
 from aura_core.memory import fact_provenance as fp
-from aura_core.memory.embed_engine import HashingEmbedder
+from aura_core.memory.embed_engine import HashingEmbedder, SentenceTransformerEmbedder, get_embedder
 from aura_core.memory.hybrid_search import BM25, HybridSearchEngine
 from aura_core.memory.reranker import rerank
 from aura_core.memory.session_dates import requested_session_date, session_header_date
@@ -46,6 +48,16 @@ def test_in_memory_hybrid_bm25_only_and_with_vectors():
   dense.index_batch(docs)
   best = dense.search("ferry dawn", top_k=1)[0]
   assert best.id == "a" and best.vector_score > 0 and best.bm25_score > 0
+
+
+# -- embedder factory --------------------------------------------------------------
+def test_get_embedder_kinds(monkeypatch):
+  assert isinstance(get_embedder("hashing"), HashingEmbedder)
+  monkeypatch.setenv("AURA_CORE_EMBEDDER", "hashing")
+  assert isinstance(get_embedder(), HashingEmbedder)
+  assert isinstance(get_embedder("st"), SentenceTransformerEmbedder)  # lazy: no model is loaded here
+  with pytest.raises(ValueError):
+    get_embedder("banana")
 
 
 # -- reranker fail-safe ------------------------------------------------------------
