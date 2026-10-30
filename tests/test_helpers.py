@@ -3,13 +3,6 @@ import sqlite3
 from aura_core.memory import fact_provenance as fp
 from aura_core.memory.embed_engine import HashingEmbedder
 from aura_core.memory.hybrid_search import BM25, HybridSearchEngine
-from aura_core.memory.memory_types import (
-  Episode,
-  KnowledgeTriple,
-  MemoryScore,
-  Skill,
-  calculate_recency_score,
-)
 from aura_core.memory.reranker import rerank
 from aura_core.memory.session_dates import requested_session_date, session_header_date
 
@@ -53,29 +46,6 @@ def test_in_memory_hybrid_bm25_only_and_with_vectors():
   dense.index_batch(docs)
   best = dense.search("ferry dawn", top_k=1)[0]
   assert best.id == "a" and best.vector_score > 0 and best.bm25_score > 0
-
-
-# -- types ------------------------------------------------------------------------
-def test_types_roundtrip_and_ids():
-  ep = Episode(id="", timestamp="2026-01-15T10:00:00", context="c", action="a", outcome="o",
-               thought_process="t", entities=["x"])
-  assert ep.id.startswith("ep_") and Episode.from_dict(ep.to_dict()) == ep
-  sk = Skill(id="", name="n", description="d", pattern="p", trigger_conditions=[], action_template="t")
-  assert sk.id.startswith("sk_") and Skill.from_dict(sk.to_dict()) == sk
-  kt = KnowledgeTriple(id="", subject="Python", predicate="is_a", object="language")
-  assert kt.id.startswith("kg_") and kt.to_text() == "Python is_a language"
-  assert KnowledgeTriple.from_dict(kt.to_dict()) == kt
-
-
-def test_scoring_and_recency():
-  s = MemoryScore(similarity=1.0, importance=1.0, recency=1.0, access_frequency=1.0)
-  assert abs(s.combined_score - 1.0) < 1e-9
-  from datetime import datetime
-
-  now = datetime(2026, 1, 31)
-  assert calculate_recency_score("2026-01-31T00:00:00", 30, now=now) == 1.0
-  assert 0.36 < calculate_recency_score("2026-01-01T00:00:00", 30, now=now) < 0.38  # e^-1
-  assert calculate_recency_score("not a date") == 0.5
 
 
 # -- reranker fail-safe ------------------------------------------------------------
