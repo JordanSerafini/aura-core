@@ -10,6 +10,7 @@ Two implementations share the same tiny interface (`dim`, `embed(texts)`):
   with no download, and so tests are reproducible.
 
 Environment:
+  AURA_CORE_EMBEDDER      backend picked by get_embedder(): "st" (default) or "hashing"
   AURA_CORE_EMBED_MODEL   model name (default: sentence-transformers/all-MiniLM-L6-v2)
   AURA_CORE_EMBED_DEVICE  force a device, e.g. "cpu"
   AURA_CORE_OFFLINE       "1" to use the local model cache only
