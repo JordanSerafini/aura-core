@@ -102,10 +102,12 @@ def test_delete_by_source(store):
   assert store.search_fts("dawn", k=3) == []  # FTS index followed the delete
 
 
-def test_replace_source_is_atomic_and_replaces(store):
-  def chunk(i, text):
-    return {"id": f"s:{i}", "source": "s", "type": "topic", "content": text, "embedding": EMB.embed([text])[0]}
+def _source_chunk(i, text):
+  return {"id": f"s:{i}", "source": "s", "type": "topic", "content": text, "embedding": EMB.embed([text])[0]}
 
+
+def test_replace_source_is_atomic_and_replaces(store):
+  chunk = _source_chunk
   store.replace_source("s", "topic", "h1", [chunk(0, "first version"), chunk(1, "more text")])
   store.replace_source("s", "topic", "h2", [chunk(0, "second version")])
   assert store.count() == 1
@@ -113,6 +115,23 @@ def test_replace_source_is_atomic_and_replaces(store):
   assert store.search_fts("first", k=3) == []
   with pytest.raises(ValueError):
     store.replace_source("s", "topic", "h3", [{**chunk(0, "x"), "source": "other"}])
+
+
+def test_replace_source_rolls_back_when_a_late_step_fails(store, monkeypatch):
+  # The ValueError above fires before the transaction opens. Fail inside it instead:
+  # neither the chunks nor sources_meta may keep the half-done replacement.
+  from aura_core.memory import fact_provenance
+
+  store.replace_source("s", "topic", "h1", [_source_chunk(0, "first version"), _source_chunk(1, "more text")])
+
+  def boom(conn, source):
+    raise RuntimeError("reconcile failed")
+
+  monkeypatch.setattr(fact_provenance, "reconcile_source", boom)
+  with pytest.raises(RuntimeError):
+    store.replace_source("s", "topic", "h2", [_source_chunk(0, "second version")])
+  assert store.count() == 2
+  assert store.get_source_hash("s") == "h1"
 
 
 def test_secrets_are_masked_before_writing(store):
@@ -143,3 +162,10 @@ def test_session_date_constrains_selection(store):
   hits = store.search_hybrid(EMB.embed([q])[0], q, k=1, filter_type="session")
   assert hits[0]["session_date_match"] == "2026-03-13"
   assert hits[0]["id"] == "sess3"
+
+
+def test_mark_source_indexed_without_chunks(store):
+  store.mark_source_indexed("notes/a.md", "note", "h1", 0)
+  assert store.is_indexed("notes/a.md", "h1") and not store.is_indexed("notes/a.md", "h2")
+  store.mark_source_indexed("notes/a.md", "note", "h2", 3)
+  assert store.get_source_hash("notes/a.md") == "h2"

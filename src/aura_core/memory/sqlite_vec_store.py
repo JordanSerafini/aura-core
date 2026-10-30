@@ -276,13 +276,7 @@ class SqliteVecStore:
       conn.execute("DELETE FROM vec_chunks WHERE rowid IN (SELECT rowid FROM chunks WHERE source=?)", (source,))
       conn.execute("DELETE FROM chunks WHERE source=?", (source,))
       n = self.upsert(chunks)
-      conn.execute(
-        """INSERT INTO sources_meta(source,type,last_indexed,content_hash,chunk_count)
-           VALUES (?,?,?,?,?) ON CONFLICT(source) DO UPDATE SET
-           type=excluded.type,last_indexed=excluded.last_indexed,
-           content_hash=excluded.content_hash,chunk_count=excluded.chunk_count""",
-        (source, type_, time.time(), content_hash, n),
-      )
+      self._write_source_meta(conn, source, type_, content_hash, n)
       reconcile_source(conn, source)
       conn.commit()
       return n
@@ -290,8 +284,10 @@ class SqliteVecStore:
       conn.rollback()
       raise
 
-  def mark_source_indexed(self, source: str, type_: str, content_hash: str, chunk_count: int) -> None:
-    conn = self._connect()
+  @staticmethod
+  def _write_source_meta(conn: sqlite3.Connection, source: str, type_: str, content_hash: str,
+                         chunk_count: int) -> None:
+    # No commit here: replace_source calls it inside its own transaction.
     conn.execute(
       """INSERT INTO sources_meta (source, type, last_indexed, content_hash, chunk_count)
          VALUES (?, ?, ?, ?, ?)
@@ -300,6 +296,10 @@ class SqliteVecStore:
            chunk_count = excluded.chunk_count""",
       (source, type_, time.time(), content_hash, chunk_count),
     )
+
+  def mark_source_indexed(self, source: str, type_: str, content_hash: str, chunk_count: int) -> None:
+    conn = self._connect()
+    self._write_source_meta(conn, source, type_, content_hash, chunk_count)
     conn.commit()
 
   # -- reads ----------------------------------------------------------------
