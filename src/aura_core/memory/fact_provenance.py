@@ -51,11 +51,11 @@ def capture_source(conn: sqlite3.Connection, source: str) -> None:
   if not _has_facts(conn) or not _has_chunks(conn):
     return
   rows = conn.execute(
-    """SELECT f.id, f.chunk_id, f.superseded_by, c.content
+    """SELECT f.id, f.superseded_by, c.content
        FROM fact_ledger f LEFT JOIN chunks c ON c.id=f.chunk_id WHERE f.source=?""",
     (source,),
   ).fetchall()
-  for fid, _cid, successor, content in rows:
+  for fid, successor, content in rows:
     old = conn.execute("SELECT evidence FROM fact_provenance WHERE fact_id=?", (fid,)).fetchone()
     if old and old[0]:
       continue
