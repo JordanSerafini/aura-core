@@ -12,7 +12,7 @@ This repo is a clean extraction, not the whole system. It has no history from th
 
 The benchmark is the part I care about most. In the original project it was used to test retrieval ideas that looked obvious on paper. Several did not beat the existing setup once measured, and were dropped. The lesson I kept: write the questions and the answers down first, then change the retrieval.
 
-Figures from the private instance (not reproducible from this repo): about 9.4k indexed chunks, hybrid BM25 + vector retrieval, 125 active task lines scheduled from one markdown file (measured 2026-10-05).
+Figures from the private instance (not reproducible from this repo, counted 2026-11-03): about 27k indexed chunks, hybrid BM25 + vector retrieval, 193 tasks scheduled from one markdown file.
 
 ## Layout
 
@@ -62,6 +62,8 @@ for hit in store.search_hybrid(emb.embed([q])[0], q, k=2):
 
 With `query_embedding=None`, `search_hybrid` degrades to BM25 only.
 
+To re-index a file that changed, `store.replace_source(source, type_, file_hash, chunks, embedder=emb)` swaps all its chunks in one transaction and only embeds the chunks whose text is new. The others keep their stored vector.
+
 ## Benchmark
 
 ```
@@ -92,7 +94,7 @@ aura-core-heartbeat --file examples/HEARTBEAT.md run       # start the scheduler
 aura-core-heartbeat history
 ```
 
-Grammar (`## Every 5 minutes`, `## Daily at 08:30`, `## Weekly on friday at 17:45`, then `- [ ] \`command\` -- [local] [timeout:30] [depends:id] description`) is documented at the top of `heartbeat/parser.py`. A bad line is reported, never fatal: the rest of the file keeps running. Tasks marked `[tokens]` are skipped unless `--allow-tokens` is given. The runner executes shell commands only. There is no LLM call, no notification channel.
+Grammar (`## Every 5 minutes`, `## Daily at 08:30`, `## Weekly on friday at 17:45`, then `- [ ] \`command\` -- [local] [timeout:30] [depends:id] description`) is documented at the top of `heartbeat/parser.py`. A bad line is reported, never fatal: the rest of the file keeps running. Tasks marked `[tokens]` are skipped unless `--allow-tokens` is given. On the night clocks go back, APScheduler 3 fires a task due daily at 02:30 twice; the runner skips the second run and records it as `skipped_repeated_hour`. The runner executes shell commands only. There is no LLM call, no notification channel.
 
 ## Limits
 
