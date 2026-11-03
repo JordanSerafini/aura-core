@@ -13,6 +13,8 @@ Statuses recorded per run:
   timeout             killed after `[timeout:N]` seconds (whole process group)
   skipped_dependency  `[depends:X]` and X has not completed successfully (last run)
   skipped_tokens      task is marked `[tokens]` and tokens were not allowed
+  skipped_repeated_hour  clocks went back and this daily/weekly slot already ran
+                      during the first pass of the repeated hour
 """
 
 import os
@@ -38,6 +40,7 @@ from aura_core.heartbeat.parser import ParsedTasks, parse_heartbeat
 
 OUTPUT_TAIL_CHARS = 2000
 RELOAD_JOB_ID = "__reload__"
+REPEATED_HOUR_WINDOW = timedelta(minutes=70)
 
 
 @dataclass
@@ -92,6 +95,14 @@ class RunHistory:
         "ORDER BY id DESC LIMIT 1", (task_ref, task_ref)).fetchone()
     return row[0] if row else None
 
+  def ran_since(self, task_id: str, since: datetime) -> bool:
+    """Did a real (not skipped) run of this task start at or after `since` (naive wall-clock time)?"""
+    with self._connect() as conn:
+      row = conn.execute(
+        "SELECT 1 FROM task_runs WHERE task_id = ? AND started_at >= ? AND status NOT LIKE 'skipped%' LIMIT 1",
+        (task_id, since.isoformat(timespec="seconds"))).fetchone()
+    return row is not None
+
   def recent(self, limit: int = 20) -> list[dict]:
     with self._connect() as conn:
       conn.row_factory = sqlite3.Row
@@ -106,8 +117,30 @@ def _kill_group(proc: subprocess.Popen) -> None:
     proc.kill()
 
 
-def execute_task(task: ScheduledTask, history: RunHistory, *, allow_tokens: bool = False) -> RunResult:
-  """Run one task now, record it, return the result. Never raises for task failures."""
+def in_repeated_hour(now_ts: float | None = None) -> bool:
+  """True during the hour that the switch back to winter time makes happen twice.
+
+  APScheduler 3 (checked on 3.11.3) computes cron fire times on the wall clock:
+  a task due daily at 02:30 fires at 02:30 summer time, then again at 02:30
+  winter time one hour later. Only during that second pass was the UTC offset
+  one real hour ago larger than it is now. `is not None` on purpose: after the
+  switch the offset is zero in London or Lisbon, and zero is falsy.
+  """
+  now_ts = time.time() if now_ts is None else now_ts
+  before = datetime.fromtimestamp(now_ts - 3600).astimezone().utcoffset()
+  current = datetime.fromtimestamp(now_ts).astimezone().utcoffset()
+  return before is not None and current is not None and before > current
+
+
+def execute_task(task: ScheduledTask, history: RunHistory, *, allow_tokens: bool = False,
+                 scheduled: bool = False) -> RunResult:
+  """Run one task now, record it, return the result. Never raises for task failures.
+
+  `scheduled` is set when the scheduler fires the task. Only then is a daily or
+  weekly slot that already ran in the first pass of the repeated hour skipped
+  (a backup run twice fails on the archive it has just written). A manual run
+  is never skipped for that reason.
+  """
   started = datetime.now()
   t0 = time.monotonic()
 
@@ -121,6 +154,10 @@ def execute_task(task: ScheduledTask, history: RunHistory, *, allow_tokens: bool
     return finish("skipped_tokens", None, "task is marked [tokens]; run with --allow-tokens to include it")
   if task.depends_on and history.last_status(task.depends_on) != "ok":
     return finish("skipped_dependency", None, f"dependency {task.depends_on!r} has not completed successfully")
+  # Run history uses naive local times: during the second pass, the first one looks like it just happened.
+  if (scheduled and task.schedule_type in ("daily", "weekly") and in_repeated_hour()
+      and history.ran_since(task.task_id, started - REPEATED_HOUR_WINDOW)):
+    return finish("skipped_repeated_hour", None, "clocks went back: this slot already ran an hour ago")
 
   proc = subprocess.Popen(
     task.command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -169,7 +206,8 @@ def sync_jobs(scheduler: BaseScheduler, tasks: list[ScheduledTask], history: Run
       continue
     extra = {"next_run_time": datetime.now() + timedelta(seconds=1)} if run_on_start else {}
     scheduler.add_job(
-      execute_task, trigger=build_trigger(task), args=[task, history], kwargs={"allow_tokens": allow_tokens},
+      execute_task, trigger=build_trigger(task), args=[task, history],
+      kwargs={"allow_tokens": allow_tokens, "scheduled": True},
       id=task.task_id, name=task.command, replace_existing=True, **extra,
     )
     changed += 1

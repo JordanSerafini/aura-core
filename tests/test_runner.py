@@ -1,13 +1,22 @@
 import time
+from datetime import datetime, timezone
 
 import pytest
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from aura_core.heartbeat import runner as runner_module
 from aura_core.heartbeat.cli import main as cli_main
 from aura_core.heartbeat.parser import parse_text
-from aura_core.heartbeat.runner import HeartbeatRunner, RunHistory, execute_task, run_once, sync_jobs
+from aura_core.heartbeat.runner import (
+  HeartbeatRunner,
+  RunHistory,
+  execute_task,
+  in_repeated_hour,
+  run_once,
+  sync_jobs,
+)
 
 
 @pytest.fixture
@@ -62,6 +71,56 @@ def test_token_tasks_are_skipped_unless_allowed(history):
   assert execute_task(task, history, allow_tokens=True).status == "ok"
   # a skipped run must not count as the dependency's last real status
   assert history.last_status(task.task_id) == "ok"
+
+
+@pytest.fixture
+def local_tz(monkeypatch):
+  def use(name):
+    monkeypatch.setenv("TZ", name)
+    time.tzset()
+  yield use
+  monkeypatch.undo()
+  time.tzset()
+
+
+def _utc(*args) -> float:
+  return datetime(*args, tzinfo=timezone.utc).timestamp()
+
+
+def test_in_repeated_hour_is_only_the_second_pass(local_tz):
+  # Paris, 2026-10-25: 03:00 summer time becomes 02:00 winter time at 01:00 UTC.
+  local_tz("Europe/Paris")
+  assert not in_repeated_hour(_utc(2026, 10, 25, 0, 30))  # 02:30, first pass
+  assert in_repeated_hour(_utc(2026, 10, 25, 1, 30))      # 02:30, second pass
+  assert not in_repeated_hour(_utc(2026, 10, 25, 2, 0))   # 03:00, back to normal
+  assert not in_repeated_hour(_utc(2026, 3, 29, 1, 30))   # spring forward skips an hour, repeats none
+  assert not in_repeated_hour(_utc(2026, 7, 1, 12, 0))
+  # London lands on UTC+0: a zero offset must still count.
+  local_tz("Europe/London")
+  assert in_repeated_hour(_utc(2026, 10, 25, 1, 30))
+  local_tz("UTC")
+  assert not in_repeated_hour(_utc(2026, 10, 25, 1, 30))
+
+
+def test_daily_slot_is_not_replayed_in_the_repeated_hour(history, monkeypatch):
+  daily = parse_text("## Daily at 02:30\n- [ ] `echo backup` -- [local] x\n")[0]
+  hourly = one("- [ ] `echo ping` -- [local] y")
+  monkeypatch.setattr(runner_module, "in_repeated_hour", lambda now_ts=None: True)
+  assert execute_task(daily, history, scheduled=True).status == "ok"  # nothing ran yet: first pass
+  assert execute_task(daily, history, scheduled=True).status == "skipped_repeated_hour"
+  assert history.last_status(daily.task_id) == "ok"  # the skip is not the dependency status
+  assert execute_task(daily, history).status == "ok"  # a manual run is never skipped
+  assert [execute_task(hourly, history, scheduled=True).status for _ in range(2)] == ["ok", "ok"]
+  monkeypatch.setattr(runner_module, "in_repeated_hour", lambda now_ts=None: False)
+  assert execute_task(daily, history, scheduled=True).status == "ok"
+
+
+def test_sync_jobs_marks_runs_as_scheduled(history):
+  sched = BackgroundScheduler()
+  sched.start(paused=True)
+  sync_jobs(sched, parse_text("## Daily at 02:30\n- [ ] `echo a` -- x\n"), history)
+  assert sched.get_jobs()[0].kwargs == {"allow_tokens": False, "scheduled": True}
+  sched.shutdown(wait=False)
 
 
 def test_sync_jobs_builds_the_right_triggers_and_prunes(history):
