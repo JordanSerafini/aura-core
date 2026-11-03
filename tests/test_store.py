@@ -134,6 +134,50 @@ def test_replace_source_rolls_back_when_a_late_step_fails(store, monkeypatch):
   assert store.get_source_hash("s") == "h1"
 
 
+class CountingEmbedder:
+  def __init__(self, fail=False):
+    self.dim, self.texts, self.fail = EMB.dim, [], fail
+
+  def embed(self, texts):
+    if self.fail:
+      raise RuntimeError("model unavailable")
+    self.texts.extend(texts)
+    return EMB.embed(texts)
+
+
+def _bare_chunk(i, text):
+  return {"id": f"s:{i}", "source": "s", "type": "topic", "content": text}
+
+
+def test_replace_source_only_embeds_the_changed_chunks(store):
+  emb = CountingEmbedder()
+  store.replace_source("s", "topic", "h1", [_bare_chunk(0, "monday: backups ran"), _bare_chunk(1, "tuesday: quiet")],
+                       embedder=emb)
+  assert emb.texts == ["monday: backups ran", "tuesday: quiet"]
+  kept = store.vectors_by_hash("s")
+  assert len(kept) == 2
+  # The journal grows: one new chunk, one rewritten, one unchanged.
+  emb.texts.clear()
+  store.replace_source("s", "topic", "h2", [_bare_chunk(0, "monday: backups ran"),
+                                            _bare_chunk(1, "tuesday: disk full"),
+                                            _bare_chunk(2, "wednesday: fixed")], embedder=emb)
+  assert emb.texts == ["tuesday: disk full", "wednesday: fixed"]
+  after = store.vectors_by_hash("s")
+  (same,) = set(kept) & set(after)  # only monday's text is in both versions
+  assert len(after) == 3 and after[same] == kept[same]
+  hit = store.search(EMB.embed(["monday: backups ran"])[0], k=1)[0]
+  assert hit["id"] == "s:0" and hit["distance"] < 1e-6  # the reused vector is the original one
+  assert store.health()["ok"] and store.health()["vectors"] == 3
+
+
+def test_replace_source_with_a_failing_embedder_changes_nothing(store):
+  store.replace_source("s", "topic", "h1", [_bare_chunk(0, "first version")], embedder=CountingEmbedder())
+  with pytest.raises(RuntimeError):
+    store.replace_source("s", "topic", "h2", [_bare_chunk(0, "second version")], embedder=CountingEmbedder(fail=True))
+  assert store.get_source_hash("s") == "h1"
+  assert [h["id"] for h in store.search_fts("first", k=3)] == ["s:0"]
+
+
 def test_secrets_are_masked_before_writing(store):
   secret = "sk-" + "a1B2c3D4e5F6g7H8i9J0"
   store.upsert([{"id": "z", "source": "s", "type": "topic", "content": f"deploy with key {secret} today"}])
