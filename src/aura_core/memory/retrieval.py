@@ -13,6 +13,8 @@ tangential extract is worse than none. Hence the abstentions:
   source file, so two extracts are two different pieces of information;
 - index files (a list of links, like a `MEMORY.md`) are never injected, and
   dated journals or notes older than `old_days` only when BOTH sides found them.
+  Files named in `pinned` do not age: a standing rule written months ago ("never
+  restart X during a backup") is as valid as on its first day.
 
 Measured on 60 real prompts hand-graded extract by extract: 37 % relevant with
 3 extracts; the 3rd was relevant 25 % of the time, notes older than 60 days
@@ -160,7 +162,7 @@ def prompt_selection(prompt: str, session_id: str, *, db, embedder: Callable[[st
                      types: Iterable[str] = DEFAULT_TYPES, seen: dict | None = None,
                      timing: dict | None = None, limit: int = MAX_INJECT,
                      context: str = "", index_files: frozenset = INDEX_FILES,
-                     old_days: float = OLD_DAYS) -> list[tuple]:
+                     old_days: float = OLD_DAYS, pinned: frozenset = frozenset()) -> list[tuple]:
   """Return up to `limit` `(rowid, type, source, extract)` tuples, or `[]` to abstain."""
   timing = timing if timing is not None else {}
   seen = seen if seen is not None else {}
@@ -247,7 +249,7 @@ def prompt_selection(prompt: str, session_id: str, *, db, embedder: Callable[[st
       continue
     both = rowid in sem_ids and covers.get(rowid, 0) >= 2
     mt = mtimes.get(rowid)
-    old = bool(mt) and (time.time() - float(mt)) / 86400 > old_days
+    old = bool(mt) and (time.time() - float(mt)) / 86400 > old_days and name not in pinned
     if not both and (old or JOURNAL_RE.search(name)):
       continue
     extract = " ".join((extract or "").split())[:170]

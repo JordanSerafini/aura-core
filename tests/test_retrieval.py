@@ -112,6 +112,19 @@ def test_index_files_old_notes_and_journals_need_both_sides(tmp_path):
   assert prompt_selection("lifejackets inspection", "s", db=path) == []
 
 
+def test_pinned_notes_do_not_age(tmp_path):
+  import time
+  path = _store(tmp_path, [
+    {"id": "1", "content": "Lifejackets inspection must never be skipped before a crossing", "source": "rules.md",
+     "mtime": time.time() - 400 * 86400},
+    {"id": "2", "content": "Lifejackets inspection noted in the journal", "source": "2025-01-02.md",
+     "mtime": time.time() - 400 * 86400},
+  ])
+  assert prompt_selection("lifejackets inspection", "a", db=path) == []
+  picked = prompt_selection("lifejackets inspection", "b", db=path, pinned=frozenset({"rules.md", "2025-01-02.md"}))
+  assert [p[2] for p in picked] == ["rules.md"]  # pinning exempts from age, not from the journal rule
+
+
 def test_short_prompt_takes_its_subject_from_the_previous_reply(db):
   ctx = conversation_context("where is it at?", "The ferry timetable export is running. [SUGGEST: ok]")
   assert "timetable" in ctx and "SUGGEST" not in ctx
