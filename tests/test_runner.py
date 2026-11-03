@@ -159,6 +159,18 @@ def test_sync_jobs_keeps_the_schedule_of_unchanged_tasks(history):
   sched.shutdown(wait=False)
 
 
+def test_a_daily_task_moved_to_another_hour_fires_at_the_new_hour(history):
+  # Keeping the stored next run time is right for an interval (its phase), wrong for a cron: a task moved
+  # from 23:45 to 22:30 would still fire at 23:45 that evening, in the window it was moved out of.
+  sched = BackgroundScheduler()
+  sched.start(paused=True)
+  sync_jobs(sched, parse_text("## Daily at 23:45\n- [ ] `echo suite` -- x\n"), history)
+  assert sync_jobs(sched, parse_text("## Daily at 22:30\n- [ ] `echo suite` -- x\n"), history) == (1, 0)
+  job = sched.get_jobs()[0]
+  assert (job.next_run_time.hour, job.next_run_time.minute) == (22, 30)
+  sched.shutdown(wait=False)
+
+
 def test_runner_follows_file_edits(tmp_path, history):
   f = tmp_path / "HEARTBEAT.md"
   f.write_text("## Every 1 hour\n- [ ] `echo a` -- x\n")
