@@ -23,7 +23,8 @@ the number injected is what matters.
 A short prompt ("where is the export at?") rarely carries its subject; the
 previous assistant reply usually does. `conversation_context()` builds that
 context and `prompt_selection(context=...)` adds it to the vector side only, so
-an explicit subject in the prompt still wins through the keyword side.
+an explicit subject in the prompt still wins through the keyword side. The text
+sent to the embedder is capped (`embed_text`): its cost grows with its length.
 
 Both rankings (BM25 and vector k-NN) are fused by Reciprocal Rank Fusion.
 `embedder` is a callable `str -> list[float]`; without it, keyword side only.
@@ -54,6 +55,25 @@ JOURNAL_RE = re.compile(r"\d{4}-\d\d-\d\d(?:-weekly)?\.md$")
 CONTEXT_MAX_WORDS = 12
 CONTEXT_CHARS = 300
 _SUGGEST = re.compile(r"\[(?:SUGGEST|PROPOSE)[^\]]*\]")
+
+
+# Embedding time grows with the length of the text (about 0.8 ms per character on CPU for the model of
+# the original project, whose recall hook waits 0.65 s at most). Whole prompts made the vector side miss
+# that deadline on 59 % of calls over two days. Capped at 350 characters, a replay of 57 real prompts went
+# from 42 misses to 0, and the top 3 of the retrieval benchmark did not change on any of its 91 questions.
+EMBED_MAX_CHARS = 350
+
+
+def embed_text(prompt: str, context: str = "", max_chars: int = EMBED_MAX_CHARS) -> str:
+  """Text for the vector side: start of the prompt, then the context (head and tail) in the room left."""
+  head = prompt[:max_chars]
+  room = max_chars - len(head) - 2
+  if not context or room < 40:
+    return head
+  if len(context) > room:
+    half = (room - 5) // 2
+    context = f"{context[:half]} ... {context[-half:]}"
+  return f"{head}\n\n{context}"
 
 
 def conversation_context(prompt: str, previous_reply: str) -> str:
@@ -189,7 +209,7 @@ def prompt_selection(prompt: str, session_id: str, *, db, embedder: Callable[[st
   finally:
     timing["fts_ms"] = (time.perf_counter() - t_fts) * 1000
 
-  sem_rows = semantic_rows(db, f"{prompt}\n\n{context}" if context else prompt, embedder, types, timing, limit=6)
+  sem_rows = semantic_rows(db, embed_text(prompt, context), embedder, types, timing, limit=6)
   sem_ids = {r[0] for r in sem_rows}
   scores: dict[int, float] = {}
   meta: dict[int, tuple] = {}

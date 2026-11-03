@@ -1,7 +1,7 @@
 import pytest
 
 from aura_core.memory.embed_engine import HashingEmbedder
-from aura_core.memory.retrieval import conversation_context, prompt_selection
+from aura_core.memory.retrieval import EMBED_MAX_CHARS, conversation_context, embed_text, prompt_selection
 from aura_core.memory.sqlite_vec_store import SqliteVecStore
 
 EMB = HashingEmbedder(dim=64)
@@ -119,3 +119,25 @@ def test_short_prompt_takes_its_subject_from_the_previous_reply(db):
   timing = {}
   prompt_selection("where is the export at", "s", db=db, embedder=EMB, context=ctx, timing=timing)
   assert timing["embed_ms"] >= 0
+
+
+def test_text_sent_to_the_embedder_is_capped():
+  assert embed_text("short prompt") == "short prompt"
+  assert embed_text("x" * 1000) == "x" * EMBED_MAX_CHARS
+  reply = "start of the reply " + "y" * 900 + " end of the reply"
+  text = embed_text("where is it at", reply)
+  assert len(text) <= EMBED_MAX_CHARS and text.startswith("where is it at\n\nstart of the reply")
+  assert text.endswith("end of the reply") and " ... " in text
+  assert embed_text("z" * 330, reply) == "z" * 330  # less than 40 characters left: no context at all
+
+
+def test_a_long_prompt_reaches_the_embedder_capped(db):
+  sent = []
+
+  def spy(text):
+    sent.append(text)
+    return EMB.embed([text])[0]
+
+  prompt = "where are the lifejackets stored " + "and also " * 200
+  prompt_selection(prompt, "s", db=db, embedder=spy, context="previous reply about the ferry")
+  assert sent and len(sent[0]) <= EMBED_MAX_CHARS and sent[0].startswith("where are the lifejackets")
