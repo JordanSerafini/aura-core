@@ -4,8 +4,10 @@ Two layers, both conservative:
 
 1. `mask_env_values`: exact-value masking. If `AURA_CORE_ENV_FILE` points to a
    dotenv-style file, every value of a credential-looking variable (name
-   contains KEY, TOKEN, SECRET, PASSWORD, ...) that is long enough is replaced
-   wherever it appears. Zero false positives by construction.
+   contains KEY, TOKEN, SECRET, PASSWORD, PASS, ...) is replaced wherever it
+   appears, if it has 10 characters or more, or 8-9 characters mixing at least
+   two kinds (lower case, upper case, digits, others). Zero false positives by
+   construction: only exact values from the file are masked.
 2. `redact`: pattern masking for text that was never in an env file: PEM
    private keys, well-known token prefixes, `name=value` assignments with a
    credential-looking name, `Authorization: Bearer ...`, and credentials
@@ -21,9 +23,13 @@ from pathlib import Path
 
 MARK = "[REDACTED]"
 MIN_VALUE_LENGTH = 10
+# Passwords of 8 or 9 characters are common and were left in clear text. Below 10, a value must mix at
+# least two kinds of characters: an 8-letter word (`sentinel`) can be a setting and appear in plain prose.
+MIN_MIXED_VALUE_LENGTH = 8
 
+# `pass`, `psswd`, `apikey` and `jeton` (French for token) were real variable names that were never masked.
 _CREDENTIAL_NAME = re.compile(
-  r"(?i)(?:^|[_-])(?:key|token|secret|password|passwd|pwd|credential|auth)(?:[_-]|$)"
+  r"(?i)(?:^|[_-])(?:key|apikey|token|jeton|secret|password|passwd|psswd|pwd|pass|credential|auth)(?:[_-]|$)"
 )
 _PLACEHOLDERS = frozenset({"changeme", "change-me", "example", "placeholder", "your-key-here"})
 
@@ -53,6 +59,15 @@ def _env_path() -> Path | None:
   return Path(raw).expanduser() if raw else None
 
 
+def _long_enough(value: str) -> bool:
+  if len(value) >= MIN_VALUE_LENGTH:
+    return True
+  if len(value) < MIN_MIXED_VALUE_LENGTH:
+    return False
+  kinds = (r"[a-z]", r"[A-Z]", r"[0-9]", r"[^A-Za-z0-9]")
+  return sum(1 for kind in kinds if re.search(kind, value)) >= 2
+
+
 def _known_values() -> tuple[str, ...]:
   """Credential values from the optional env file, longest first. Never logged."""
   path = _env_path()
@@ -66,8 +81,7 @@ def _known_values() -> tuple[str, ...]:
     name, _, value = line.partition("=")
     name = name.strip().removeprefix("export ").strip()
     value = value.strip().strip("'\"")
-    if (_CREDENTIAL_NAME.search(name) and len(value) >= MIN_VALUE_LENGTH
-        and value.lower() not in _PLACEHOLDERS):
+    if _CREDENTIAL_NAME.search(name) and _long_enough(value) and value.lower() not in _PLACEHOLDERS:
       values.add(value)
   return tuple(sorted(values, key=len, reverse=True))
 

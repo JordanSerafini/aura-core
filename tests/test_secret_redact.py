@@ -55,5 +55,22 @@ def test_exact_value_masking_from_env_file(tmp_path, monkeypatch):
   assert n == 2 and value not in text and "hello abc" in text  # non-credential and short values untouched
 
 
+def test_short_mixed_values_and_more_credential_names(tmp_path, monkeypatch):
+  short_mixed = _fake("Xq7", "pL2wz")      # 8 characters, letters and digits
+  word = _fake("sent", "inel")              # 8 lower-case letters
+  others = {"LEGACY_PSSWD": _fake("b8Kd", "eE2mQ"), "MAPS_APIKEY": _fake("k3yVal", "ue77Long"),
+            "SERVICE_JETON": _fake("jT9", "xQ4mZw")}
+  lines = [f"SMTP_PASS={short_mixed}", f"MODE_KEY={word}", "DB_PASS=Ab1", "PASSIVE_MODE=Zr8tN3vyQ"]
+  lines += [f"{name}={value}" for name, value in others.items()]
+  env = tmp_path / "local.env"
+  env.write_text("\n".join(lines) + "\n")
+  monkeypatch.setenv("AURA_CORE_ENV_FILE", str(env))
+  text, n = mask_env_values(" ".join([short_mixed, word, "Ab1", *others.values()]))
+  assert n == 4 and short_mixed not in text and all(v not in text for v in others.values())
+  assert word in text and "Ab1" in text  # a plain word and a 3-character value stay readable
+  # PASSIVE is not a credential name: its value stays, even though it looks like one.
+  assert mask_env_values("Zr8tN3vyQ")[1] == 0
+
+
 def test_no_env_file_means_no_masking():
   assert mask_env_values("anything") == ("anything", 0)
