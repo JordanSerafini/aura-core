@@ -134,7 +134,7 @@ def test_bundled_example_parses_cleanly():
 
   example = Path(__file__).resolve().parent.parent / "examples" / "HEARTBEAT.md"
   tasks = parse_heartbeat(example)
-  assert not tasks.errors and len(tasks) == 6
+  assert not tasks.errors and len(tasks) == 7
 
 
 def test_dependency_without_target_is_reported():

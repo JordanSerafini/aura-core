@@ -49,7 +49,8 @@ def main(argv: list[str] | None = None) -> int:
   if args.cmd == "list":
     tasks = parse_heartbeat(args.file)
     for t in tasks:
-      flags = " ".join(f for f, on in (("local", t.local), ("tokens", t.uses_tokens)) if on)
+      flags = " ".join(f for f, on in (("local", t.local), ("tokens", t.uses_tokens),
+                                        (f"adaptive:x{t.adaptive}", t.adaptive)) if on)
       dep = f" depends:{t.depends_on}" if t.depends_on else ""
       print(f"{t.task_id:<28} {t.schedule_type:<8} {t.schedule_value:<14} "
             f"timeout={t.timeout}s catchup={catch_up_seconds(t)}s {flags}{dep}  `{t.command}`")

@@ -24,3 +24,4 @@ within 30 seconds.
 ## Every 1 hour
 
 - [ ] `echo "this one would call an LLM in a real setup"` -- [tokens] skipped unless --allow-tokens
+- [ ] `ls -1 /tmp` -- [local] [adaptive:8] watches a folder: after 20 identical listings it slows down, to once every 8 hours at most

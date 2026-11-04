@@ -72,6 +72,7 @@ class ScheduledTask:
   depends_on: str | None = None
   task_id: str = ""
   catchup: int | None = None     # [catchup:N] seconds, else the default of the schedule type
+  adaptive: int | None = None    # [adaptive:N] longest back-off, in periods (2 to 32)
 
 
 def catch_up_seconds(task: ScheduledTask) -> int:

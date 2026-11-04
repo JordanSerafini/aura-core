@@ -17,6 +17,8 @@ Statuses recorded per run:
                       during the first pass of the repeated hour
   skipped_missed      the run would have started later than its `[catchup:N]` window
   skipped_overlap     the previous run of the same task was still going
+  skipped_adaptive    `[adaptive:N]`: the output has not changed for a while,
+                      the task is running at a fraction of its cadence
 """
 
 import contextlib
@@ -38,6 +40,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from aura_core.config import default_heartbeat_db
+from aura_core.heartbeat.adaptive import multiplier, next_state
 from aura_core.heartbeat.models import ScheduledTask, catch_up_seconds, command_stem
 from aura_core.heartbeat.parser import ParsedTasks, parse_heartbeat
 
@@ -71,6 +74,9 @@ class RunHistory:
         status TEXT NOT NULL, exit_code INTEGER, output_tail TEXT
       )""")
       conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_task ON task_runs(task_id, id)")
+      conn.execute("""CREATE TABLE IF NOT EXISTS task_adaptive (
+        task_id TEXT PRIMARY KEY, fingerprint TEXT, unchanged INTEGER NOT NULL, skip_until REAL NOT NULL
+      )""")
 
   @contextlib.contextmanager
   def _connect(self):
@@ -107,6 +113,20 @@ class RunHistory:
         "SELECT 1 FROM task_runs WHERE task_id = ? AND started_at >= ? AND status NOT LIKE 'skipped%' LIMIT 1",
         (task_id, since.isoformat(timespec="seconds"))).fetchone()
     return row is not None
+
+  def adaptive_state(self, task_id: str) -> tuple[str | None, int, float] | None:
+    """(output fingerprint, repeats in a row, epoch time until which scheduled runs are skipped)."""
+    with self._connect() as conn:
+      row = conn.execute("SELECT fingerprint, unchanged, skip_until FROM task_adaptive WHERE task_id = ?",
+                         (task_id,)).fetchone()
+    return tuple(row) if row else None
+
+  def save_adaptive(self, task_id: str, fingerprint: str | None, unchanged: int, skip_until: float) -> None:
+    with self._connect() as conn:
+      conn.execute("INSERT INTO task_adaptive(task_id, fingerprint, unchanged, skip_until) VALUES (?,?,?,?) "
+                   "ON CONFLICT(task_id) DO UPDATE SET fingerprint = excluded.fingerprint, "
+                   "unchanged = excluded.unchanged, skip_until = excluded.skip_until",
+                   (task_id, fingerprint, unchanged, skip_until))
 
   def recent(self, limit: int = 20) -> list[dict]:
     with self._connect() as conn:
@@ -173,10 +193,17 @@ def execute_task(task: ScheduledTask, history: RunHistory, *, allow_tokens: bool
     result = RunResult(task.task_id, status, code, round(time.monotonic() - t0, 3),
                        output[-OUTPUT_TAIL_CHARS:])
     history.record(task, started, result)
+    if task.adaptive and not status.startswith("skipped"):
+      history.save_adaptive(task.task_id, *next_state(task, adaptive, status == "ok", output, time.time()))
     return result
 
   if task.uses_tokens and not allow_tokens:
     return finish("skipped_tokens", None, "task is marked [tokens]; run with --allow-tokens to include it")
+  adaptive = history.adaptive_state(task.task_id) if task.adaptive else None
+  if scheduled and adaptive and time.time() < adaptive[2]:
+    until = datetime.fromtimestamp(adaptive[2]).strftime("%Y-%m-%d %H:%M")
+    return finish("skipped_adaptive", None, f"same output {adaptive[1]} times in a row: running every "
+                  f"x{multiplier(adaptive[1], task.adaptive)} periods, next real run after {until}")
   if task.depends_on and history.last_status(task.depends_on) != "ok":
     return finish("skipped_dependency", None, f"dependency {task.depends_on!r} has not completed successfully")
   # Run history uses naive local times: during the second pass, the first one looks like it just happened.
