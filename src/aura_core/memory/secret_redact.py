@@ -10,8 +10,10 @@ Two layers, both conservative:
    construction: only exact values from the file are masked.
 2. `redact`: pattern masking for text that was never in an env file: PEM
    private keys, well-known token prefixes, `name=value` assignments with a
-   credential-looking name, `Authorization: Bearer ...`, and credentials
-   embedded in URLs.
+   credential-looking name, `Authorization: Bearer ...`, credentials
+   embedded in URLs, and the usual command lines that carry a password
+   (`PGPASSWORD=... psql`, `sshpass -p`, `mysql -p...`, `curl -u <user>:<password>`,
+   `echo ... | sudo -S`).
 
 `clean` applies both. Mask a text whole, before it is cut into chunks or
 extracts and before it is serialised: a token cut in two, or a `password=`
@@ -62,6 +64,28 @@ _ASSIGNMENT = re.compile(
   r"(?:(?:key|token|secret|password|passwd|pwd|credentials?|auth)|(?-i:[a-z0-9]+(?:Key|Token|Secret|Password|Credentials?)))"
   r"(?:[_.-][A-Za-z0-9]+)*\s*[:=]\s*)(?P<val>'[^'\n]+'|\"[^\"\n]+\"|[^\s'\";,]+)"
 )
+
+# Command lines, where the credential word is glued to another one or the value follows a flag:
+#   PGPASSWORD=... psql   sshpass -p '...' ssh   mysql -uroot -p...   curl -u <user>:<password>   echo '...' | sudo -S
+# Each form is anchored on an explicit keyword or command, so a bare `-p` or `-u` elsewhere is left alone.
+_CMD_VALUE = r"""(?P<val>'[^'\n]*'|"[^"\n]*"|[^\s'"`;|&<>)]+)"""
+_GLUED_ENV = re.compile(
+  r"(?<![A-Za-z0-9_])(?P<key>[A-Z0-9_]{0,60}(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)|SSHPASS)(?P<sep>\s*=\s*)"
+  + _CMD_VALUE
+)
+_COMMAND_FORMS = (
+  re.compile(r"(?P<key>\bsshpass\s+(?:-[A-Za-oq-z]\S*\s+)*-p\s*)" + _CMD_VALUE),
+  re.compile(r"(?P<key>\b(?:mysql(?:dump|admin|import|check|show)?|mariadb(?:-dump)?)\b[^\n|;&]{0,300}?\s-p)"
+             + _CMD_VALUE),
+  # `-u`, grouped (`-su`) or long; a quoted `user:password` is masked up to its closing quote.
+  re.compile(r"(?P<key>\bcurl\b[^\n|;&]{0,300}?\s(?:-[A-Za-z]*u|--user)[=\s]\s*(?P<q>['\"])?[^\s:'\"]+:)"
+             r"(?P<val>(?(q)[^'\"\n]+|[^\s'\"]+))"),
+  re.compile(r"(?P<key>\b(?:echo(?:\s+-[neE]+)*|printf(?:\s+'[^'\n]*'|\s+\"[^\"\n]*\")?)\s+)"
+             r"(?P<val>'[^'\n]*'|\"[^\"\n]*\"|[^\s|'\"]+)(?=\s*\|\s*sudo\s+(?:-S|--stdin)\b)"),
+  re.compile(r"(?P<key>\bsudo\s[^\n|;&<]{0,300}?(?:-S|--stdin)\b[^\n|;&<]{0,300}?<<<\s*)" + _CMD_VALUE),
+)
+# What a script writes instead of a value, taken whole: `$PASS`, `${PASS}`, `<password>`, `%PASS%`, `{{ pass }}`.
+_REFERENCE = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^<>\n]*>|%[A-Za-z_][A-Za-z0-9_]*%|\{\{[^{}\n]*\}\}")
 
 
 def _env_path() -> Path | None:
@@ -114,12 +138,37 @@ def _mask_assignment(match: re.Match) -> str:
   return match.group("key") + MARK
 
 
+def _is_reference(value: str) -> bool:
+  """A reference, a placeholder or a value already masked: nothing to hide. `$uper$ecret` is not a reference."""
+  return (not value or MARK in value or value.lower() in _PLACEHOLDERS
+          or _REFERENCE.fullmatch(value) is not None)
+
+
+def _mask_command(match: re.Match) -> str:
+  raw = match.group("val")
+  value = raw.strip("'\"")
+  # The shell does not expand `$` between single quotes: there, `'$name'` is the password itself.
+  if _is_reference(value) and not (raw.startswith("'") and value.startswith("$")):
+    return match.group(0)
+  return match.group("key") + (match.groupdict().get("sep") or "") + MARK
+
+
+def _mask_glued_env(match: re.Match) -> str:
+  # Same length bar as _mask_assignment, which also leaves `None`, `null`, `true` and `false` alone.
+  if len(match.group("val").strip("'\"")) < 6:
+    return match.group(0)
+  return _mask_command(match)
+
+
 def redact(text: str) -> str:
   """Pattern-based masking. Idempotent."""
   text = _PEM.sub(MARK, text)
   text = _PREFIXED.sub(MARK, text)
   text = _BEARER.sub(lambda m: m.group("key") + MARK, text)
   text = _URL_CREDENTIAL.sub(lambda m: m.group("key") + MARK, text)
+  text = _GLUED_ENV.sub(_mask_glued_env, text)
+  for form in _COMMAND_FORMS:
+    text = form.sub(_mask_command, text)
   text = _ASSIGNMENT.sub(_mask_assignment, text)
   return text
 

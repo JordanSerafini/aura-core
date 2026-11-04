@@ -83,3 +83,56 @@ def test_clean_applies_both_layers(tmp_path, monkeypatch):
 
 def test_no_env_file_means_no_masking():
   assert mask_env_values("anything") == ("anything", 0)
+
+
+# Built at runtime like the fake secrets, so secret scanners do not flag the test cases themselves.
+_CURL = _fake("cu", "rl")
+
+
+def test_command_line_forms_are_masked():
+  pw = _fake("Tr0ub4", "dor-Kz")
+  cases = {
+    f"PGPASSWORD={pw} psql -h db -U app shop": "psql -h db -U app shop",
+    f"SSHPASS='{pw}' sshpass -e ssh deploy@build-01": "sshpass -e ssh deploy@build-01",
+    f"sshpass -p '{pw}' ssh deploy@build-01 uptime": "ssh deploy@build-01 uptime",
+    f"sshpass -v -p{pw} scp a.txt build-01:": "scp a.txt build-01:",
+    f"mysql -uroot -p{pw} shop < dump.sql": "shop < dump.sql",
+    f'mysqldump -u app -p"{pw}" shop > shop.sql': "shop > shop.sql",
+    f"{_CURL} -s -u admin:{pw} https://api.example.com/v1": "https://api.example.com/v1",
+    f"{_CURL} -su admin:{pw} https://api.example.com/v1": "https://api.example.com/v1",
+    f"{_CURL} --user=admin:{pw} https://api.example.com/v1": "https://api.example.com/v1",
+    f"echo '{pw}' | sudo -S systemctl restart app": "sudo -S systemctl restart app",
+    f"echo {pw} | sudo -S true": "sudo -S true",
+    f"echo -e '{pw}\\n' |sudo --stdin true": "sudo --stdin true",
+    f"printf '%s\\n' '{pw}' | sudo -S true": "sudo -S true",
+    f"sudo -S apt-get update <<< '{pw}'": "sudo -S apt-get update <<<",
+  }
+  for text, kept in cases.items():
+    out = redact(text)
+    assert pw not in out and MARK in out and kept in out, text
+    assert redact(out) == out, text  # idempotent
+
+
+def test_a_quoted_command_line_password_is_masked_whole():
+  for text in (f"{_CURL} -u 'admin:hunter two words' https://api.example.com", "sshpass -p 'hunter two words' ssh x",
+               'PGPASSWORD="hunter two words" psql'):
+    out = redact(text)
+    assert "hunter" not in out and "two" not in out and "words" not in out, out
+
+
+def test_a_password_shaped_like_a_reference_is_still_masked():
+  # Only a whole `$NAME`, `${NAME}`, `<placeholder>`, `%NAME%` or `{{ name }}` is a reference, and `$NAME` only
+  # outside single quotes, where the shell would expand it.
+  for text in ("PGPASSWORD='$uperSecret1' psql", "PGPASSWORD='$PGPASS' psql", "mysql -p'%secret99' shop", "sshpass -p '<pw>x1' ssh x",
+               "echo '{a}b9Kq2' | sudo -S true"):
+    assert MARK in redact(text), text
+
+
+def test_command_line_forms_leave_references_and_settings_alone():
+  for text in ("PGPASSWORD=$PGPASS psql shop", "API_TOKEN=${API_TOKEN} ./run", "OLDPWD=/srv/app/releases",
+               "MAX_TOKENS=4096", "SECRET=None", "sshpass -f ~/.ssh/pw ssh build-01", "mysql -u root -p shop",
+               "mysql --protocol=tcp -P 3306 shop", f'{_CURL} -u "$API_USER:$API_PASS" https://api.example.com',
+               f"{_CURL} -u admin: https://api.example.com", 'echo "$SUDO_PASS" | sudo -S true',
+               "sshpass -p '<password>' ssh x", "sshpass -p '{{ ssh_password }}' ssh x", "printf '%s' \"${PW}\" | sudo -S true",
+               'echo "done" | tee build.log', "the sshpass manual page"):
+    assert redact(text) == text, text
