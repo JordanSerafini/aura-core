@@ -6,7 +6,7 @@ cadence; after the next streak a quarter, and so on, never less than 1/N of
 it. The first run whose output differs, and any run that fails, bring it back
 to its normal cadence. A run started by hand is never skipped.
 
-"The same output" ignores ISO timestamps and spacing: a line that only
+"The same output" ignores ISO dates and times and spacing: a line that only
 carries the current time is not news. An empty output never counts: a
 command that is silent when it succeeds (`rsync -a`) does work at every run.
 
@@ -23,7 +23,9 @@ from aura_core.heartbeat.models import ScheduledTask
 
 ADAPTIVE_STREAK = 20
 MIN_ADAPTIVE, MAX_ADAPTIVE = 2, 32
-_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}[T ][0-9:.+-]+")
+# An ISO date, with its time if there is one. Not `[0-9:.+-]+` after the date: that also took the count
+# written after it ("2026-11-04 3 new files").
+_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?")
 
 
 def output_fingerprint(output: str) -> str:

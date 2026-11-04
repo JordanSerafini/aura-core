@@ -16,6 +16,10 @@ def test_fingerprint_ignores_timestamps_and_spacing_only():
   assert output_fingerprint("checked at 2026-11-04T18:30:12+01:00: 0 new files\n") == \
          output_fingerprint("checked at 2026-11-05 07:02:59:   0 new files")
   assert output_fingerprint("0 new files") != output_fingerprint("1 new file")
+  # A date alone is ignored too, but never the number written after it.
+  assert output_fingerprint("report of 2026-11-04") == output_fingerprint("report of 2026-11-05")
+  assert output_fingerprint("2026-11-04 3 new files") != output_fingerprint("2026-11-05 47 new files")
+  assert output_fingerprint("2026-11-04 12:00 3 new") != output_fingerprint("2026-11-04 13:00 47 new")
 
 
 def test_multiplier_doubles_every_streak_up_to_the_cap():

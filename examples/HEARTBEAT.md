@@ -1,7 +1,7 @@
 # Example task file
 
 Syntax is documented in `src/aura_core/heartbeat/parser.py`. Every task here is
-harmless (echo, date). The file is edited live: the runner picks up changes
+harmless (echo, date, ls). The file is edited live: the runner picks up changes
 within 30 seconds.
 
 ## Every 1 minute
@@ -24,4 +24,4 @@ within 30 seconds.
 ## Every 1 hour
 
 - [ ] `echo "this one would call an LLM in a real setup"` -- [tokens] skipped unless --allow-tokens
-- [ ] `ls -1 /tmp` -- [local] [adaptive:8] watches a folder: after 20 identical listings it slows down, to once every 8 hours at most
+- [ ] `ls -l /etc/hosts` -- [local] [adaptive:8] watches a file that rarely changes: after the same output 20 more times in a row it slows down, to once every 8 hours at most
