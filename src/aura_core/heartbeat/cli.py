@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from aura_core.heartbeat.models import catch_up_seconds
 from aura_core.heartbeat.parser import parse_heartbeat
 from aura_core.heartbeat.runner import HeartbeatRunner, RunHistory, run_once
 from aura_core.heartbeat.templates import TEMPLATES
@@ -51,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
       flags = " ".join(f for f, on in (("local", t.local), ("tokens", t.uses_tokens)) if on)
       dep = f" depends:{t.depends_on}" if t.depends_on else ""
       print(f"{t.task_id:<28} {t.schedule_type:<8} {t.schedule_value:<14} "
-            f"timeout={t.timeout}s {flags}{dep}  `{t.command}`")
+            f"timeout={t.timeout}s catchup={catch_up_seconds(t)}s {flags}{dep}  `{t.command}`")
     for message in tasks.errors:
       print(f"warning: {message}", file=sys.stderr)
     return 0 if not tasks.errors else 1

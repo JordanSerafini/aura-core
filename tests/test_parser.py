@@ -1,4 +1,4 @@
-from aura_core.heartbeat.models import annotation_prefix, command_stem, stable_task_id
+from aura_core.heartbeat.models import annotation_prefix, catch_up_seconds, command_stem, stable_task_id
 from aura_core.heartbeat.parser import parse_heartbeat, parse_text
 
 SAMPLE = """
@@ -38,6 +38,32 @@ def test_annotations_only_count_before_the_prose():
   assert annotation_prefix("[local] [timeout:5] hello [tokens]") == "[local] [timeout:5] "
   task = parse_text("## Every 1 hour\n- [ ] `echo x` -- runs and mentions [tokens] in prose\n")[0]
   assert not task.uses_tokens
+
+
+def test_catch_up_window_per_schedule_type_and_annotation():
+  tasks = parse_text("""## Every 15 minutes
+- [ ] `echo a` -- x
+- [ ] `echo b` -- [catchup:3600] y
+## Daily at 08:30
+- [ ] `echo c` -- x
+- [ ] `echo d` -- [catchup:300] y
+## Weekly on monday at 07:00
+- [ ] `echo e` -- x
+""")
+  assert not tasks.errors
+  assert [catch_up_seconds(t) for t in tasks] == [600, 3600, 10800, 300, 10800]
+
+
+def test_bad_catch_up_is_reported_and_keeps_the_default():
+  tasks = parse_text("""## Every 1 hour
+- [ ] `echo a` -- [catchup:0] x
+- [ ] `echo b` -- [catchup:86401] x
+- [ ] `echo c` -- [catchup:soon] x
+- [ ] `echo d` -- [catchup:86400] x
+""")
+  assert [t.command for t in tasks] == ["echo a", "echo b", "echo c", "echo d"]
+  assert [catch_up_seconds(t) for t in tasks] == [600, 600, 600, 86400]
+  assert len(tasks.errors) == 3 and all("invalid catch-up window" in e for e in tasks.errors)
 
 
 def test_bad_input_is_reported_not_raised():

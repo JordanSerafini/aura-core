@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_TIMEOUT = 120
+# How late a run may still start, in seconds, when the scheduler is running but late (machine asleep,
+# every worker busy). An interval task runs again soon anyway; a daily or weekly one would lose its day.
+CATCHUP_INTERVAL = 600
+CATCHUP_CRON = 3 * 3600
+MAX_CATCHUP = 86400
 
 _INTERPRETERS = {"bash", "sh", "zsh", "node", "ruby", "perl"}
 
@@ -66,3 +71,11 @@ class ScheduledTask:
   timeout: int = DEFAULT_TIMEOUT
   depends_on: str | None = None
   task_id: str = ""
+  catchup: int | None = None     # [catchup:N] seconds, else the default of the schedule type
+
+
+def catch_up_seconds(task: ScheduledTask) -> int:
+  """Catch-up window of a task: its `[catchup:N]`, else 10 minutes (interval) or 3 hours (daily, weekly)."""
+  if task.catchup is not None:
+    return task.catchup
+  return CATCHUP_INTERVAL if task.schedule_type == "interval" else CATCHUP_CRON

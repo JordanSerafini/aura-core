@@ -15,7 +15,7 @@ within 30 seconds.
 
 ## Daily at 08:30
 
-- [ ] `echo "good morning"` -- [local] morning greeting
+- [ ] `echo "good morning"` -- [local] [catchup:1800] morning greeting, dropped if the machine wakes up more than 30 minutes late
 
 ## Weekly on friday at 17:45
 

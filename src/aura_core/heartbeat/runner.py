@@ -15,6 +15,8 @@ Statuses recorded per run:
   skipped_tokens      task is marked `[tokens]` and tokens were not allowed
   skipped_repeated_hour  clocks went back and this daily/weekly slot already ran
                       during the first pass of the repeated hour
+  skipped_missed      the run would have started later than its `[catchup:N]` window
+  skipped_overlap     the previous run of the same task was still going
 """
 
 import contextlib
@@ -28,6 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from apscheduler.events import EVENT_JOB_MAX_INSTANCES, EVENT_JOB_MISSED
 from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.base import BaseScheduler
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -35,13 +38,14 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from aura_core.config import default_heartbeat_db
-from aura_core.heartbeat.models import ScheduledTask, command_stem
+from aura_core.heartbeat.models import ScheduledTask, catch_up_seconds, command_stem
 from aura_core.heartbeat.parser import ParsedTasks, parse_heartbeat
 
 OUTPUT_TAIL_CHARS = 2000
 KILL_DRAIN_SECONDS = 5
 RELOAD_JOB_ID = "__reload__"
 REPEATED_HOUR_WINDOW = timedelta(minutes=70)
+SKIPPED_RUN_EVENTS = EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES
 
 
 @dataclass
@@ -208,6 +212,31 @@ def build_trigger(task: ScheduledTask):
   raise ValueError(f"unsupported schedule type: {task.schedule_type}")
 
 
+def record_skipped_runs(scheduler: BaseScheduler, history: RunHistory):
+  """Listener that writes into the history the runs APScheduler drops on its own.
+
+  Without it they leave no trace at all: a run that would start later than its
+  catch-up window, and a run that would overlap the previous one, still going
+  (`max_instances=1`). Attach it with `scheduler.add_listener(..., SKIPPED_RUN_EVENTS)`.
+  """
+  def record(event) -> None:
+    if not event.code & SKIPPED_RUN_EVENTS:
+      return
+    job = scheduler.get_job(event.job_id)
+    if job is None or not job.args:  # gone since, or the reload job (no task argument)
+      return
+    task = job.args[0]
+    if event.code == EVENT_JOB_MISSED:
+      due = event.scheduled_run_time.astimezone().strftime("%Y-%m-%d %H:%M")
+      result = RunResult(task.task_id, "skipped_missed", None, 0.0,
+                         f"run due at {due} would have started more than {job.misfire_grace_time}s late "
+                         "(machine asleep or every worker busy); [catchup:N] widens the window")
+    else:
+      result = RunResult(task.task_id, "skipped_overlap", None, 0.0, "the previous run is still going")
+    history.record(task, datetime.now(), result)
+  return record
+
+
 def sync_jobs(scheduler: BaseScheduler, tasks: list[ScheduledTask], history: RunHistory, *,
               allow_tokens: bool = False, run_on_start: bool = False) -> tuple[int, int]:
   """Make the scheduler's jobs match `tasks`. Returns (jobs_added_or_updated, jobs_removed)."""
@@ -229,7 +258,8 @@ def sync_jobs(scheduler: BaseScheduler, tasks: list[ScheduledTask], history: Run
     scheduler.add_job(
       execute_task, trigger=build_trigger(task), args=[task, history],
       kwargs={"allow_tokens": allow_tokens, "scheduled": True},
-      id=task.task_id, name=task.command, replace_existing=True, **extra,
+      id=task.task_id, name=task.command, replace_existing=True,
+      misfire_grace_time=catch_up_seconds(task), **extra,
     )
     changed += 1
   return changed, removed
@@ -250,6 +280,7 @@ class HeartbeatRunner:
       executors={"default": ThreadPoolExecutor(max_workers)},
       job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 60},
     )
+    self.scheduler.add_listener(record_skipped_runs(self.scheduler, self.history), SKIPPED_RUN_EVENTS)
     self._mtime: float | None = None
     self._lock = threading.Lock()
 

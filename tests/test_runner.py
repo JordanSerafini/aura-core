@@ -1,8 +1,15 @@
 import shutil
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from apscheduler.events import (
+  EVENT_JOB_MAX_INSTANCES,
+  EVENT_JOB_MISSED,
+  JobExecutionEvent,
+  JobSubmissionEvent,
+)
+from apscheduler.executors.base import run_job
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -11,10 +18,13 @@ from aura_core.heartbeat import runner as runner_module
 from aura_core.heartbeat.cli import main as cli_main
 from aura_core.heartbeat.parser import parse_text
 from aura_core.heartbeat.runner import (
+  RELOAD_JOB_ID,
+  SKIPPED_RUN_EVENTS,
   HeartbeatRunner,
   RunHistory,
   execute_task,
   in_repeated_hour,
+  record_skipped_runs,
   run_once,
   sync_jobs,
 )
@@ -184,6 +194,72 @@ def test_a_daily_task_moved_to_another_hour_fires_at_the_new_hour(history):
   sched.shutdown(wait=False)
 
 
+def test_sync_jobs_gives_each_job_its_catch_up_window(history):
+  sched = BackgroundScheduler()
+  sched.start(paused=True)
+  sync_jobs(sched, parse_text("""## Every 5 minutes
+- [ ] `echo a` -- x
+- [ ] `echo b` -- [catchup:30] y
+## Daily at 08:30
+- [ ] `echo c` -- z
+"""), history)
+  assert {j.name: j.misfire_grace_time for j in sched.get_jobs()} == {"echo a": 600, "echo b": 30, "echo c": 10800}
+  sched.shutdown(wait=False)
+
+
+def test_a_run_later_than_its_window_is_recorded_not_lost(history):
+  # A run that starts 30 minutes late (machine asleep, every worker busy). APScheduler's own executor code
+  # decides: missed with the default window of an interval task, run with [catchup:3600].
+  sched = BackgroundScheduler()
+  sched.start(paused=True)
+  sync_jobs(sched, parse_text("## Every 1 hour\n- [ ] `echo late` -- [local] x\n"
+                              "- [ ] `echo patient` -- [local] [catchup:3600] y\n"), history)
+  record = record_skipped_runs(sched, history)
+  late = datetime.now(timezone.utc) - timedelta(minutes=30)
+  for job in sched.get_jobs():
+    for event in run_job(job, "default", [late], "test"):
+      record(event)
+  sched.shutdown(wait=False)
+  assert sorted(r["status"] for r in history.recent()) == ["ok", "skipped_missed"]  # an executed run adds no row
+  rows = {r["command"]: r for r in history.recent()}
+  assert rows["echo late"]["status"] == "skipped_missed" and "[catchup:N]" in rows["echo late"]["output_tail"]
+  assert rows["echo patient"]["status"] == "ok"
+  assert history.last_status(rows["echo late"]["task_id"]) is None  # a skip is never a dependency status
+
+
+def test_an_overlapping_run_is_recorded(history):
+  sched = BackgroundScheduler()
+  sched.start(paused=True)
+  tasks = parse_text("## Every 1 minute\n- [ ] `echo slow` -- x\n")
+  sync_jobs(sched, tasks, history)
+  sched.add_job(lambda: None, IntervalTrigger(seconds=30), id=RELOAD_JOB_ID)
+  record = record_skipped_runs(sched, history)
+  now = datetime.now(timezone.utc)
+  record(JobSubmissionEvent(EVENT_JOB_MAX_INSTANCES, tasks[0].task_id, "default", [now]))
+  record(JobSubmissionEvent(EVENT_JOB_MAX_INSTANCES, RELOAD_JOB_ID, "default", [now]))  # not a task
+  record(JobExecutionEvent(EVENT_JOB_MISSED, "removed-meanwhile", "default", now))
+  sched.shutdown(wait=False)
+  assert [r["status"] for r in history.recent()] == ["skipped_overlap"]
+
+
+def test_the_running_scheduler_records_a_missed_run(tmp_path, history):
+  assert any(mask & EVENT_JOB_MISSED for _, mask in HeartbeatRunner(tmp_path / "HB.md", history).scheduler._listeners)
+  sched = BackgroundScheduler()
+  sched.add_listener(record_skipped_runs(sched, history), SKIPPED_RUN_EVENTS)
+  sched.start(paused=True)
+  sync_jobs(sched, parse_text("## Every 1 hour\n- [ ] `echo asleep` -- [local] x\n"), history)
+  # Woken up 90 minutes after the job was due: the last due run is 30 minutes late, past the 600 s default.
+  sched.get_jobs()[0].modify(next_run_time=datetime.now(timezone.utc) - timedelta(minutes=90))
+  sched.resume()
+  try:
+    deadline = time.time() + 10
+    while time.time() < deadline and not history.recent():
+      time.sleep(0.1)
+  finally:
+    sched.shutdown(wait=True)
+  assert [r["status"] for r in history.recent()] == ["skipped_missed"]
+
+
 def test_runner_follows_file_edits(tmp_path, history):
   f = tmp_path / "HEARTBEAT.md"
   f.write_text("## Every 1 hour\n- [ ] `echo a` -- x\n")
@@ -231,5 +307,5 @@ def test_cli_list_once_history(tmp_path, capsys):
   assert cli_main(["-f", str(f), "--db", db, "once"]) == 0
   assert cli_main(["-f", str(f), "--db", db, "history"]) == 0
   out = capsys.readouterr().out
-  assert "echo cli" in out and "ok" in out
+  assert "echo cli" in out and "ok" in out and "catchup=600s" in out
   assert cli_main(["-f", str(tmp_path / "missing.md"), "list"]) == 2

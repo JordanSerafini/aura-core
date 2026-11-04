@@ -11,8 +11,14 @@ Format:
 A `##` schedule heading applies to the task lines below it, until the next
 heading. Annotations are only honoured when they sit before the prose:
 `[local]`, `[tokens]`, `[timeout:N]` (seconds), `[depends:stem_or_id]`,
-`[id:custom-id]`. `## On event: name` headings are recognised but not
-supported by this runner (a warning is recorded).
+`[id:custom-id]`, `[catchup:N]`. `## On event: name` headings are recognised
+but not supported by this runner (a warning is recorded).
+
+`[catchup:N]` is how late, in seconds (1 to 86400), a run may still start when
+the scheduler is running but late: machine back from sleep, every worker busy.
+Default: 600 for an interval task, 3 hours for a daily or weekly one. A run
+later than that is not started; it is recorded as `skipped_missed`. A run due
+while the runner was stopped is not replayed.
 
 The parser never raises on a bad line. It records a message in
 `ParsedTasks.errors` and keeps the tasks it could read, so one typo does not
@@ -25,6 +31,7 @@ from pathlib import Path
 
 from aura_core.heartbeat.models import (
   DEFAULT_TIMEOUT,
+  MAX_CATCHUP,
   ScheduledTask,
   annotation_prefix,
   command_stem,
@@ -42,6 +49,8 @@ _SCHEDULE_HEADING = re.compile(r"^#{1,6}\s+(Every|Daily|Weekly|On)\b", re.I)
 _TIMEOUT = re.compile(r"\[timeout:(\d+)\]")
 _DEPENDS = re.compile(r"\[depends:([^\]]+)\]")
 _ID = re.compile(r"\[id:([A-Za-z0-9_.-]+)\]")
+_CATCHUP = re.compile(r"\[catchup:([^\]]*)\]")
+_SECONDS = re.compile(r"[0-9]{1,6}")
 
 _UNIT_SECONDS = {"h": 3600, "hour": 3600, "hours": 3600, "m": 60, "min": 60, "minute": 60,
                  "minutes": 60, "d": 86400, "day": 86400, "days": 86400}
@@ -127,6 +136,13 @@ def parse_text(text: str) -> ParsedTasks:
     if depends_on in {task_id, command_stem(command)}:
       tasks.errors.append(f"self-dependency refused: {command}")
       continue
+    catchup = None
+    if found := _CATCHUP.search(flags):
+      value = found.group(1).strip()
+      if _SECONDS.fullmatch(value) and 1 <= int(value) <= MAX_CATCHUP:
+        catchup = int(value)
+      else:
+        tasks.errors.append(f"invalid catch-up window (1 to {MAX_CATCHUP} seconds), default kept: {command}")
     tasks.append(ScheduledTask(
       command=command,
       description=description,
@@ -141,6 +157,7 @@ def parse_text(text: str) -> ParsedTasks:
       timeout=int(timeout.group(1)) if timeout else DEFAULT_TIMEOUT,
       depends_on=depends_on,
       task_id=task_id,
+      catchup=catchup,
     ))
 
   # The same command may appear under two schedules: keep ids stable but jobs distinct.
