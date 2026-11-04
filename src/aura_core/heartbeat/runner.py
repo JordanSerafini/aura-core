@@ -17,13 +17,13 @@ Statuses recorded per run:
                       during the first pass of the repeated hour
 """
 
+import contextlib
 import os
 import signal
 import sqlite3
 import subprocess
 import threading
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -39,6 +39,7 @@ from aura_core.heartbeat.models import ScheduledTask, command_stem
 from aura_core.heartbeat.parser import ParsedTasks, parse_heartbeat
 
 OUTPUT_TAIL_CHARS = 2000
+KILL_DRAIN_SECONDS = 5
 RELOAD_JOB_ID = "__reload__"
 REPEATED_HOUR_WINDOW = timedelta(minutes=70)
 
@@ -67,7 +68,7 @@ class RunHistory:
       )""")
       conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_task ON task_runs(task_id, id)")
 
-  @contextmanager
+  @contextlib.contextmanager
   def _connect(self):
     """Open, commit and CLOSE (sqlite3's own context manager does not close)."""
     conn = sqlite3.connect(self.db_path, timeout=10)
@@ -115,6 +116,26 @@ def _kill_group(proc: subprocess.Popen) -> None:
     os.killpg(proc.pid, signal.SIGKILL)
   except (ProcessLookupError, PermissionError):
     proc.kill()
+
+
+def _drain_after_kill(proc: subprocess.Popen) -> str:
+  """Output left in the pipe after the group kill, read for KILL_DRAIN_SECONDS at most.
+
+  A process started with `setsid` (a daemon, a detached helper) is not in the
+  killed group and keeps the pipe open for as long as it lives. Reading up to
+  end of file would block this worker thread with it, and with
+  `max_instances=1` every later run of the task would be lost without a trace.
+  """
+  try:
+    output, _ = proc.communicate(timeout=KILL_DRAIN_SECONDS)
+    return output or ""
+  except subprocess.TimeoutExpired as exc:
+    partial = exc.output or b""  # raw bytes, even in text mode
+    with contextlib.suppress(subprocess.TimeoutExpired):
+      proc.wait(timeout=KILL_DRAIN_SECONDS)
+    if proc.stdout:
+      proc.stdout.close()
+    return partial.decode(errors="replace") if isinstance(partial, bytes) else partial
 
 
 def in_repeated_hour(now_ts: float | None = None) -> bool:
@@ -167,8 +188,8 @@ def execute_task(task: ScheduledTask, history: RunHistory, *, allow_tokens: bool
     output, _ = proc.communicate(timeout=task.timeout)
   except subprocess.TimeoutExpired:
     _kill_group(proc)
-    output, _ = proc.communicate()
-    return finish("timeout", None, (output or "") + f"\n[killed after {task.timeout}s]")
+    output = _drain_after_kill(proc)
+    return finish("timeout", None, output + f"\n[killed after {task.timeout}s]")
   return finish("ok" if proc.returncode == 0 else "failed", proc.returncode, output or "")
 
 

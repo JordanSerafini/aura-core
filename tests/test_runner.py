@@ -1,3 +1,4 @@
+import shutil
 import time
 from datetime import datetime, timezone
 
@@ -42,6 +43,18 @@ def test_timeout_kills_the_whole_process_group(history):
   task = one("- [ ] `sh -c 'sleep 30 & sleep 30'` -- [timeout:1] slow")
   result = execute_task(task, history)
   assert result.status == "timeout" and time.monotonic() - t0 < 10
+
+
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="needs setsid")
+def test_timeout_does_not_wait_for_a_process_that_left_the_group(history, monkeypatch):
+  # `setsid` puts the grandchild in a new session: the group kill misses it, and it still holds the
+  # output pipe. Reading that pipe to the end would block the worker thread for as long as it lives.
+  monkeypatch.setattr(runner_module, "KILL_DRAIN_SECONDS", 0.5)
+  t0 = time.monotonic()
+  task = one("- [ ] `sh -c 'echo started; setsid sleep 8 & sleep 30'` -- [timeout:1] escapes")
+  result = execute_task(task, history)
+  assert result.status == "timeout" and time.monotonic() - t0 < 4
+  assert "started" in result.output_tail and "[killed after 1s]" in result.output_tail
 
 
 def test_dependency_gate(history):
