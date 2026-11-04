@@ -12,7 +12,7 @@ This repo is a clean extraction, not the whole system. It has no history from th
 
 The benchmark is the part I care about most. In the original project it was used to test retrieval ideas that looked obvious on paper. Several did not beat the existing setup once measured, and were dropped. The lesson I kept: write the questions and the answers down first, then change the retrieval.
 
-Figures from the private instance (not reproducible from this repo, counted 2026-11-03): about 27k indexed chunks, hybrid BM25 + vector retrieval, 193 tasks scheduled from one markdown file.
+Figures from the private instance (not reproducible from this repo, counted 2026-11-04): about 28.6k indexed chunks, hybrid BM25 + vector retrieval, 196 tasks scheduled from one markdown file.
 
 ## Layout
 
@@ -27,6 +27,7 @@ src/aura_core/
                data/                 synthetic corpus (30 docs) + ground truth (23 questions)
   heartbeat/   parser.py, models.py  HEARTBEAT.md grammar
                runner.py, cli.py     APScheduler runner + history
+               adaptive.py           [adaptive:N]: slow down a task whose output never changes
 examples/HEARTBEAT.md                harmless sample task file
 tests/                               pytest suite
 ```
@@ -62,6 +63,8 @@ for hit in store.search_hybrid(emb.embed([q])[0], q, k=2):
 
 With `query_embedding=None`, `search_hybrid` degrades to BM25 only.
 
+Content and metadata go through `secret_redact` before they are written, and the embedder only ever sees the masked text (an `Embedder` can be a remote service). Metadata is masked field by field before `json.dumps`, which escapes the quotes a pattern relies on, and a field whose name holds a credential (`password`, `PGPASSWORD`, `apiKey`, `client_secret`) is masked whole, whatever its value. Besides `name=value` assignments, the patterns cover the usual command lines that carry a password: `PGPASSWORD=... psql`, `sshpass -p`, `mysql -p...`, `curl -u`, `echo ... | sudo -S`. Masking works on whole texts: if you split documents yourself, run `secret_redact.clean()` on the document before splitting it, because a secret cut across two chunks no longer looks like one.
+
 To re-index a file that changed, `store.replace_source(source, type_, file_hash, chunks, embedder=emb)` swaps all its chunks in one transaction and only embeds the chunks whose text is new. The others keep their stored vector.
 
 ## Benchmark
@@ -96,12 +99,23 @@ aura-core-heartbeat history
 
 Grammar (`## Every 5 minutes`, `## Daily at 08:30`, `## Weekly on friday at 17:45`, then `- [ ] \`command\` -- [local] [timeout:30] [depends:id] description`) is documented at the top of `heartbeat/parser.py`. A bad line is reported, never fatal: the rest of the file keeps running. Tasks marked `[tokens]` are skipped unless `--allow-tokens` is given. On the night clocks go back, APScheduler 3 fires a task due daily at 02:30 twice; the runner skips the second run and records it as `skipped_repeated_hour`. The runner executes shell commands only. There is no LLM call, no notification channel.
 
+Runs the scheduler drops while it is running are recorded too:
+
+- `skipped_missed`: the scheduler was running but late (machine back from sleep, every worker busy) beyond the task's catch-up window. The default window is 10 minutes for an interval task and 3 hours for a daily or weekly one, `[catchup:N]` sets it in seconds. Several missed periods of one task count as one, the latest (APScheduler's `coalesce`), and runs due while the runner was stopped are neither replayed nor recorded.
+- `skipped_overlap`: the previous run of the same task was still going.
+- `skipped_adaptive`: see `[adaptive:N]` below.
+
+`[timeout:N]` kills the whole process group. The runner also stops waiting after a short delay when a grandchild has left the group and still holds the output pipe: it used to block until that process exited, and with one instance per task every later run was lost.
+
+`[adaptive:N]` (2 to 32) is for watchers whose silence is the normal case, like a folder that rarely changes or a page checked for a new release. Once a task has succeeded with the same output 21 times in a row (a first run, then 20 repeats; ISO dates, times and spacing are ignored), it runs every other period, then one in four, down to one in N. The first different output or the first failure brings it back to its normal cadence, an empty output never counts as unchanged, and a run started by hand is never skipped. The cost is latency, since a change is only seen at the next real run. Do not use it for a check whose failure must show up within the period. In the private instance, 2 tasks out of 196 use it.
+
 ## Limits
 
 - Tested on Python 3.12 only (declared `>=3.10`). SQLite built with FTS5 and extension loading (sqlite-vec requirement).
 - The hashing embedder is for tests and offline runs only.
 - Single process, single writer. No auth, not meant to be exposed on a network.
-- `secret_redact` is pattern based. It reduces the chance of indexing a credential, it does not guarantee it.
+- `secret_redact` is pattern based. It reduces the chance of indexing a credential, it does not guarantee it. It is tuned for notes, logs and shell commands, not source code, where `password = get_password()` gets masked too.
+- The scheduler stores the last 2,000 characters of each run's output as they are, unmasked: keep secrets out of what your tasks print.
 - Extracted from a larger personal project: some design choices only make sense in that context.
 
 ## Beyond this repo
