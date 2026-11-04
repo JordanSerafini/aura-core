@@ -73,7 +73,7 @@ def test_vector_side_rescues_a_chunk_and_types_are_respected(db):
 
 
 def test_accented_words_count_toward_coverage(tmp_path):
-  # "Écluse" (accent initial, lower() de SQLite ne le touche pas) et "cœur" (hors de l'ancienne plage à-ÿ).
+  # "Écluse" (accented first letter, which SQLite's lower() leaves alone) and "cœur" (outside the old à-ÿ range).
   path = tmp_path / "accents.db"
   store = SqliteVecStore(path, dim=EMB.dim)
   store.add_documents([
