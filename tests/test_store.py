@@ -240,6 +240,22 @@ def test_ordinary_metadata_fields_stay_readable(store):
   assert {k: kept[k] for k in secret} == dict.fromkeys(secret, MARK)
 
 
+def test_a_credential_field_is_masked_whatever_its_value(store):
+  # Under a credential name the value is the secret, short, with spaces or starting with `$`. Only a whole
+  # reference, a placeholder or an unset marker stays readable.
+  pw = _fake("Xq7pL2", "wzR9kT4m")
+  secret = {"password": "1234", "PGPASSWORD": pw, "SSHPASS": pw, "db_pass": pw, "pw": pw,
+            "passphrase": "correct horse battery staple", "Authorization": _fake("Basic ", "dXNlcjpwYXNz"),
+            "api_key": _fake("$uper", "$ecret99"), "token": "a b"}
+  kept = {"token_ref": "x", "access_token": "${API_TOKEN}", "db_password": " $DB_PASSWORD\n", "secret": "None",
+          "client_secret": "<your secret>", "api_key_hint": "rotate yearly", "password_hint": "", "boarding": "gate 4"}
+  store.upsert([{"id": "m", "source": "s", "type": "topic", "content": "deploy notes",
+                 "metadata": {**secret, **kept}}])
+  stored = json.loads(_stored_metadata(store, "m"))
+  assert {k: stored[k] for k in secret} == dict.fromkeys(secret, MARK)
+  assert {k: stored[k] for k in kept} == kept
+
+
 def test_the_embedder_only_sees_masked_text(store):
   token = _fake("ghp_", "A1b2C3d4E5f6G7h8I9j0K1l2")
   pw = _fake("Xq7pL2", "wzR9kT4m")

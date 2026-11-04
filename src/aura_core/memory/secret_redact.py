@@ -41,8 +41,12 @@ _CREDENTIAL_NAME = re.compile(
 # _ASSIGNMENT on purpose: in a record, `key`, `sort_key` or `auth` are ordinary settings. The credential
 # word ends the name: `access_token` holds one, `token_count` does not.
 _CREDENTIAL_FIELD = re.compile(
-  r"(?:^|_)(?:password|passwd|psswd|pwd|secret|token|credentials?|(?:api|secret|access|private)_?key)$"
+  r"(?:^|_)(?:password|passwd|psswd|passphrase|pass|pwd|pw|secret|token|authorization|credentials?"
+  r"|(?:api|secret|access|private)_?key)$"
 )
+# Upper-case names where the credential word is glued to another one: PGPASSWORD, MYSQLTOKEN, SSHPASS.
+_GLUED_NAME = r"[A-Z0-9_]{0,60}(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)|SSHPASS"
+_UNSET = frozenset({"none", "null", "true", "false"})
 _PLACEHOLDERS = frozenset({"changeme", "change-me", "example", "placeholder", "your-key-here"})
 
 _PEM = re.compile(
@@ -69,10 +73,7 @@ _ASSIGNMENT = re.compile(
 #   PGPASSWORD=... psql   sshpass -p '...' ssh   mysql -uroot -p...   curl -u <user>:<password>   echo '...' | sudo -S
 # Each form is anchored on an explicit keyword or command, so a bare `-p` or `-u` elsewhere is left alone.
 _CMD_VALUE = r"""(?P<val>'[^'\n]*'|"[^"\n]*"|[^\s'"`;|&<>)]+)"""
-_GLUED_ENV = re.compile(
-  r"(?<![A-Za-z0-9_])(?P<key>[A-Z0-9_]{0,60}(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)|SSHPASS)(?P<sep>\s*=\s*)"
-  + _CMD_VALUE
-)
+_GLUED_ENV = re.compile(r"(?<![A-Za-z0-9_])(?P<key>" + _GLUED_NAME + r")(?P<sep>\s*=\s*)" + _CMD_VALUE)
 _COMMAND_FORMS = (
   re.compile(r"(?P<key>\bsshpass\s+(?:-[A-Za-oq-z]\S*\s+)*-p\s*)" + _CMD_VALUE),
   re.compile(r"(?P<key>\b(?:mysql(?:dump|admin|import|check|show)?|mariadb(?:-dump)?)\b[^\n|;&]{0,300}?\s-p)"
@@ -180,9 +181,18 @@ def clean(text: str) -> str:
 
 
 def credential_field(name: str) -> bool:
-  """True for a field name that holds a credential: `password`, `DB_PASSWORD`, `apiKey`, `client-secret`."""
+  """True for a field name that holds a credential: `password`, `DB_PASSWORD`, `apiKey`, `PGPASSWORD`."""
+  if re.fullmatch(_GLUED_NAME, name):
+    return True
   snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).lower().replace("-", "_").replace(".", "_")
   return bool(_CREDENTIAL_FIELD.search(snake))
+
+
+def secret_field(name: str, value: str) -> bool:
+  """True when a record field is to be masked whole: under a credential name, the value is the secret,
+  short or with spaces, unless it is a reference, a placeholder or an unset marker (`None`, `null`)."""
+  value = value.strip()
+  return credential_field(name) and not _is_reference(value) and value.lower() not in _UNSET
 
 
 def has_secret(text: str) -> bool:

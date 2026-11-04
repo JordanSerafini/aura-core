@@ -28,7 +28,7 @@ import sqlite_vec
 
 from aura_core.config import default_memory_db
 from aura_core.memory.embed_engine import DEFAULT_DIM, Embedder
-from aura_core.memory.secret_redact import MARK, clean, credential_field, redact
+from aura_core.memory.secret_redact import MARK, clean, secret_field
 
 
 def _serialize_vec(vec: list[float]) -> bytes:
@@ -190,8 +190,8 @@ class SqliteVecStore:
 
     Dumped first, quotes and newlines come out escaped and `{"api_key": v}`
     becomes `"api_key": "v"`: the patterns no longer see a `name=value`. So a
-    string is masked on its own, then, under a credential field name only, as
-    the assignment `key=value` it stands for (`sort_key` or `auth` stay readable).
+    string is masked on its own, then whole if its field name holds a
+    credential (`password`, `PGPASSWORD`; `sort_key` or `auth` stay readable).
     """
     if isinstance(value, dict):
       return {k: self._clean_metadata(v, str(k)) for k, v in value.items()}
@@ -200,8 +200,7 @@ class SqliteVecStore:
     if not isinstance(value, str):
       return value
     value = self._clean(value)
-    assignment = f"{key}={value}"
-    return MARK if credential_field(key) and redact(assignment) != assignment else value
+    return MARK if secret_field(key, value) else value
 
   def upsert(self, chunks: list[dict]) -> int:
     """Insert or replace chunks.
