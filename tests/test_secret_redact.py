@@ -1,3 +1,5 @@
+import time
+
 from aura_core.memory.secret_redact import MARK, clean, has_secret, mask_env_values, redact
 
 
@@ -135,4 +137,26 @@ def test_command_line_forms_leave_references_and_settings_alone():
                f"{_CURL} -u admin: https://api.example.com", 'echo "$SUDO_PASS" | sudo -S true',
                "sshpass -p '<password>' ssh x", "sshpass -p '{{ ssh_password }}' ssh x", "printf '%s' \"${PW}\" | sudo -S true",
                'echo "done" | tee build.log', "the sshpass manual page"):
+    assert redact(text) == text, text
+
+
+def test_masking_time_stays_linear_on_long_dashed_or_dotted_runs():
+  # In `-a-a-a...` every letter follows a word boundary, and each start used to scan to the end of the run:
+  # 1 s for 8 KB, minutes for 100 KB. 100 KB here takes a few hundredths of a second.
+  for text in ("-a" * 50000, "a." * 50000, "token-" * 17000, "key:<" * 20000, "x-" * 50000 + "password=" + "y" * 20):
+    t0 = time.perf_counter()
+    redact(text)
+    assert time.perf_counter() - t0 < 1.0, text[:12]
+
+
+def test_assignment_names_are_read_whole():
+  pw = _fake("hunter", "22secret")
+  for text in (f'_API_KEY = "{pw}"', f"_db_password: {pw}", f"self._config.db_password = '{pw}'",
+               f"url: password={pw}", f"note=<api_key:{pw}>", f"x-y.smtp_token: {pw}", f"db-password: {pw}",
+               f"clé.password={pw}"):
+    out = redact(text)
+    assert pw not in out and MARK in out, text
+  # A credential name inside a value already masked is not masked a second time.
+  assert redact(f"password={pw}-token:{pw} end") == f"password={MARK} end"
+  for text in ("monkey=bananas", "tokenizer: default", "keyboard: azerty12"):
     assert redact(text) == text, text

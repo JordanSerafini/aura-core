@@ -38,7 +38,7 @@ _CREDENTIAL_NAME = re.compile(
   r"(?i)(?:^|[_-])(?:key|apikey|token|jeton|secret|password|passwd|psswd|pwd|pass|credential|auth)(?:[_-]|$)"
 )
 # Field names that hold a credential, for records masked field by field (store metadata). Narrower than
-# _ASSIGNMENT on purpose: in a record, `key`, `sort_key` or `auth` are ordinary settings. The credential
+# _ASSIGNMENT_KEY on purpose: in a record, `key`, `sort_key` or `auth` are ordinary settings. The credential
 # word ends the name: `access_token` holds one, `token_count` does not.
 _CREDENTIAL_FIELD = re.compile(
   r"(?:^|_)(?:password|passwd|psswd|passphrase|pass|pwd|pw|secret|token|authorization|credentials?"
@@ -58,16 +58,22 @@ _PREFIXED = re.compile(
   r"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b"
 )
 _BEARER = re.compile(r"(?i)(?P<key>\bBearer\s+)(?P<val>[A-Za-z0-9._~+/=-]{12,})")
-_URL_CREDENTIAL = re.compile(r"(?P<key>\b[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@'\"]+:)(?P<val>[^\s@/'\"]+)(?=@)")
+# The scheme starts where a name would (see _ASSIGNMENT_KEY): from every `\b` of `-a-a-a...`, it was quadratic.
+_URL_CREDENTIAL = re.compile(
+  r"(?P<key>(?<!\w)(?<![A-Za-z0-9][+.-])[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@'\"]+:)(?P<val>[^\s@/'\"]+)(?=@)"
+)
 # The credential word must be a whole name segment (`api_key`, `DB_PASSWORD`,
 # `apiKey`), so "monkey" or "tokenizer" do not trigger it. Same words as
 # _CREDENTIAL_NAME: `auth=` and `credential:` used to slip through. `Auth` is not
 # a camelCase suffix on purpose, so "oAuth: enabled" stays readable.
-_ASSIGNMENT = re.compile(
-  r"(?i)(?P<key>\b(?:[A-Za-z0-9]+[_.-])*"
-  r"(?:(?:key|token|secret|password|passwd|pwd|credentials?|auth)|(?-i:[a-z0-9]+(?:Key|Token|Secret|Password|Credentials?)))"
-  r"(?:[_.-][A-Za-z0-9]+)*\s*[:=]\s*)(?P<val>'[^'\n]+'|\"[^\"\n]+\"|[^\s'\";,]+)"
-)
+_CREDENTIAL_WORD = re.compile(r"(?i)key|token|secret|password|passwd|pwd|credentials?|auth")
+_CREDENTIAL_CAMEL = re.compile(r"[a-z0-9]+(?:Key|Token|Secret|Password|Credentials?)")
+# `name: value` or `name=value`. The name (letters and digits, any alphabet, joined by `_`, `.` or `-`) is read
+# whole, from where it starts (not after a word character, nor inside `a-b` or `a.b`), and checked segment by
+# segment in Python; the value is read only after a credential name. A single regex looking for the credential word anywhere in the name took cubic time on
+# `token-token-token...` (6 s for 3 KB, minutes for 100 KB).
+_ASSIGNMENT_KEY = re.compile(r"(?<!\w)(?<![^\W_][.-])(?P<name>_*[^\W_]+(?:[_.-]+[^\W_]+)*)\s*[:=]\s*")
+_ASSIGNMENT_VALUE = re.compile(r"'[^'\n]+'|\"[^\"\n]+\"|[^\s'\";,]+")
 
 # Command lines, where the credential word is glued to another one or the value follows a flag:
 #   PGPASSWORD=... psql   sshpass -p '...' ssh   mysql -uroot -p...   curl -u <user>:<password>   echo '...' | sudo -S
@@ -131,12 +137,29 @@ def mask_env_values(text: str) -> tuple[str, int]:
   return text, count
 
 
-def _mask_assignment(match: re.Match) -> str:
-  value = match.group("val").strip("'\"")
-  # Leave references and obvious placeholders alone: `token=$TOKEN`, `key=<your key>`.
-  if value.startswith(("$", "<", "{", "%")) or value.lower() in _PLACEHOLDERS or len(value) < 6:
-    return match.group(0)
-  return match.group("key") + MARK
+def _credential_name(name: str) -> bool:
+  return any(_CREDENTIAL_WORD.fullmatch(part) or _CREDENTIAL_CAMEL.fullmatch(part) for part in re.split(r"[_.-]+", name))
+
+
+def _mask_assignments(text: str) -> str:
+  out, done, start = [], 0, 0
+  while key := _ASSIGNMENT_KEY.search(text, start):
+    start = key.end()
+    if not _credential_name(key.group("name")):
+      continue
+    # Leave references and obvious placeholders alone: `token=$TOKEN`, `key=<your key>`. A value left in clear
+    # is still read for names, so `<api_key:...` is not a way around the mask. A reference is told by its first
+    # character, without reading it to its end: `key:<key:<...` would be quadratic.
+    if text[start:start + 2].lstrip("'\"")[:1] in ("$", "<", "{", "%"):
+      continue
+    if not (found := _ASSIGNMENT_VALUE.match(text, start)):
+      continue
+    value = found.group().strip("'\"")
+    if value.startswith(("$", "<", "{", "%")) or value.lower() in _PLACEHOLDERS or len(value) < 6:
+      continue
+    out += [text[done:start], MARK]
+    done = start = found.end()
+  return "".join(out) + text[done:]
 
 
 def _is_reference(value: str) -> bool:
@@ -170,8 +193,7 @@ def redact(text: str) -> str:
   text = _GLUED_ENV.sub(_mask_glued_env, text)
   for form in _COMMAND_FORMS:
     text = form.sub(_mask_command, text)
-  text = _ASSIGNMENT.sub(_mask_assignment, text)
-  return text
+  return _mask_assignments(text)
 
 
 def clean(text: str) -> str:
