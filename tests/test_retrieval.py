@@ -134,6 +134,40 @@ def test_short_prompt_takes_its_subject_from_the_previous_reply(db):
   assert timing["embed_ms"] >= 0
 
 
+def _fake(prefix: str, body: str) -> str:
+  # Built at runtime so no secret-shaped literal sits in the repository.
+  return prefix + body
+
+
+def _leaks(secret: str, text: str, n: int = 5) -> bool:
+  return any(secret[i:i + n] in text for i in range(len(secret) - n + 1))
+
+
+def test_text_is_masked_before_it_is_cut():
+  # A secret cut in two is no longer recognised by the patterns: what is left of it goes through.
+  body = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+  token = _fake("ghp_", body)
+  head = conversation_context("and that one?", "w" * 290 + " " + token + " " + "word " * 100)
+  tail = conversation_context("and that one?", "word " * 100 + token + " " + "w" * 280)
+  pw = _fake("Xq7pL2", "wzR9kT4m")
+  capped = embed_text("x" * 335 + " password=" + pw)  # the cut leaves 5 characters of the value
+  assert not _leaks(body, head) and not _leaks(body, tail) and not _leaks(pw, capped)
+  assert len(capped) == EMBED_MAX_CHARS
+
+
+def test_the_prompt_reaches_the_embedder_masked(db):
+  sent = []
+
+  def spy(text):
+    sent.append(text)
+    return EMB.embed([text])[0]
+
+  token = _fake("ghp_", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8")
+  prompt_selection(f"where are the lifejackets stored, token {token}", "s", db=db, embedder=spy,
+                   context=f"previous reply with password={_fake('Xq7pL2', 'wzR9kT4m')}")
+  assert sent and token not in sent[0] and "wzR9kT4m" not in sent[0] and "lifejackets" in sent[0]
+
+
 def test_text_sent_to_the_embedder_is_capped():
   assert embed_text("short prompt") == "short prompt"
   assert embed_text("x" * 1000) == "x" * EMBED_MAX_CHARS

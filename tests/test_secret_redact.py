@@ -1,4 +1,4 @@
-from aura_core.memory.secret_redact import MARK, has_secret, mask_env_values, redact
+from aura_core.memory.secret_redact import MARK, clean, has_secret, mask_env_values, redact
 
 
 def _fake(prefix: str, body: str) -> str:
@@ -70,6 +70,15 @@ def test_short_mixed_values_and_more_credential_names(tmp_path, monkeypatch):
   assert word in text and "Ab1" in text  # a plain word and a 3-character value stay readable
   # PASSIVE is not a credential name: its value stays, even though it looks like one.
   assert mask_env_values("Zr8tN3vyQ")[1] == 0
+
+
+def test_clean_applies_both_layers(tmp_path, monkeypatch):
+  value = _fake("v4lue-", "x9Zq81LmN2")
+  env = tmp_path / "local.env"
+  env.write_text(f"SERVICE_TOKEN={value}\n")
+  monkeypatch.setenv("AURA_CORE_ENV_FILE", str(env))
+  out = clean(f"plain {value} and password=hunter22secret")
+  assert value not in out and "hunter22secret" not in out and out.count(MARK) == 2
 
 
 def test_no_env_file_means_no_masking():

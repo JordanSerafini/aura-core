@@ -13,6 +13,10 @@ Two layers, both conservative:
    credential-looking name, `Authorization: Bearer ...`, and credentials
    embedded in URLs.
 
+`clean` applies both. Mask a text whole, before it is cut into chunks or
+extracts and before it is serialised: a token cut in two, or a `password=`
+whose quotes json.dumps has escaped, no longer has a recognisable shape.
+
 This is a safety net, not a guarantee. Pattern masking misses secrets with no
 recognisable shape, so do not index material you would not want to leak.
 """
@@ -112,6 +116,12 @@ def redact(text: str) -> str:
   text = _URL_CREDENTIAL.sub(lambda m: m.group("key") + MARK, text)
   text = _ASSIGNMENT.sub(_mask_assignment, text)
   return text
+
+
+def clean(text: str) -> str:
+  """Both layers: exact values from `AURA_CORE_ENV_FILE`, then patterns."""
+  text, _ = mask_env_values(text)
+  return redact(text)
 
 
 def has_secret(text: str) -> bool:

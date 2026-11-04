@@ -27,6 +27,8 @@ previous assistant reply usually does. `conversation_context()` builds that
 context and `prompt_selection(context=...)` adds it to the vector side only, so
 an explicit subject in the prompt still wins through the keyword side. The text
 sent to the embedder is capped (`embed_text`): its cost grows with its length.
+Both functions mask secrets before they cut, never after: what is left of a
+token cut in two has no recognisable shape.
 
 Both rankings (BM25 and vector k-NN) are fused by Reciprocal Rank Fusion.
 `embedder` is a callable `str -> list[float]`; without it, keyword side only.
@@ -37,6 +39,8 @@ import sqlite3
 import struct
 import time
 from collections.abc import Callable, Iterable
+
+from aura_core.memory.secret_redact import clean
 
 STOPWORDS = frozenset("""
 avec dans pour sans mais donc alors cette votre notre leur sont etre avoir fait
@@ -68,6 +72,7 @@ EMBED_MAX_CHARS = 350
 
 def embed_text(prompt: str, context: str = "", max_chars: int = EMBED_MAX_CHARS) -> str:
   """Text for the vector side: start of the prompt, then the context (head and tail) in the room left."""
+  prompt, context = clean(prompt), clean(context)
   head = prompt[:max_chars]
   room = max_chars - len(head) - 2
   if not context or room < 40:
@@ -86,7 +91,7 @@ def conversation_context(prompt: str, previous_reply: str) -> str:
   """
   if not previous_reply or len(prompt.split()) > CONTEXT_MAX_WORDS:
     return ""
-  text = " ".join(_SUGGEST.sub(" ", previous_reply).split())
+  text = " ".join(_SUGGEST.sub(" ", clean(previous_reply)).split())
   if not text:
     return ""
   if len(text) <= 2 * CONTEXT_CHARS:

@@ -28,7 +28,7 @@ import sqlite_vec
 
 from aura_core.config import default_memory_db
 from aura_core.memory.embed_engine import DEFAULT_DIM, Embedder
-from aura_core.memory.secret_redact import mask_env_values, redact
+from aura_core.memory.secret_redact import MARK, clean, redact
 
 
 def _serialize_vec(vec: list[float]) -> bytes:
@@ -183,10 +183,24 @@ class SqliteVecStore:
     return len(rowids)
 
   def _clean(self, text: str) -> str:
-    if not self.redact_secrets:
-      return text
-    text, _ = mask_env_values(text)
-    return redact(text)
+    return clean(text) if self.redact_secrets else text
+
+  def _clean_metadata(self, value, key: str = ""):
+    """Metadata masked value by value, before json.dumps.
+
+    Dumped first, quotes and newlines come out escaped and `{"api_key": v}`
+    becomes `"api_key": "v"`: the patterns no longer see a `name=value`. So a
+    string is masked on its own, then as the assignment `key=value` it stands for.
+    """
+    if isinstance(value, dict):
+      return {k: self._clean_metadata(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+      return [self._clean_metadata(v, key) for v in value]
+    if not isinstance(value, str):
+      return value
+    value = self._clean(value)
+    assignment = f"{key}={value}"
+    return MARK if key and redact(assignment) != assignment else value
 
   def upsert(self, chunks: list[dict]) -> int:
     """Insert or replace chunks.
@@ -195,6 +209,8 @@ class SqliteVecStore:
     (optional list[float] of length `dim`), mtime, metadata, content_hash.
     Content and metadata are passed through the secret masker before writing,
     which also feeds the FTS index. The caller's embedding is kept as given.
+    Each chunk is masked on its own: mask a document whole (`secret_redact.clean`)
+    before splitting it, or a secret cut by a chunk boundary goes through.
     """
     if not chunks:
       return 0
@@ -213,7 +229,10 @@ class SqliteVecStore:
           raise ValueError(f"invalid embedding for {c['id']}: {len(emb)} dimensions, {self.dim} expected")
         content = self._clean(c["content"])
         content_hash = c.get("content_hash") or _hash_content(content)
-        meta_json = self._clean(json.dumps(c.get("metadata", {}), default=str, ensure_ascii=False))
+        metadata = c.get("metadata", {})
+        if self.redact_secrets:  # plain JSON types first, so values json.dumps would stringify are masked too
+          metadata = self._clean_metadata(json.loads(json.dumps(metadata, default=str)))
+        meta_json = self._clean(json.dumps(metadata, default=str, ensure_ascii=False))
         # RETURNING is required: cursor.lastrowid can still hold the rowid of a
         # previous INSERT when ON CONFLICT takes the UPDATE branch.
         row = conn.execute(
@@ -255,7 +274,8 @@ class SqliteVecStore:
         "mtime": d.get("mtime"),
       })
     if embedder is not None:
-      vectors = embedder.embed([c["content"] for c in chunks])
+      # The model sees what the store keeps: masked text (it may be a remote service).
+      vectors = embedder.embed([self._clean(c["content"]) for c in chunks])
       for c, v in zip(chunks, vectors, strict=True):
         c["embedding"] = v
     return self.upsert(chunks)
@@ -291,7 +311,7 @@ class SqliteVecStore:
           todo.append(chunk)
       out.append(chunk)
     if todo:
-      vectors = embedder.embed([c["content"] for c in todo])
+      vectors = embedder.embed([self._clean(c["content"]) for c in todo])
       for chunk, vector in zip(todo, vectors, strict=True):
         chunk["embedding"] = vector
     return out

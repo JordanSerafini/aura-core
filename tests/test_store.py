@@ -1,6 +1,9 @@
+import json
+
 import pytest
 
 from aura_core.memory.embed_engine import HashingEmbedder
+from aura_core.memory.secret_redact import MARK
 from aura_core.memory.sqlite_vec_store import SqliteVecStore
 
 EMB = HashingEmbedder(dim=64)
@@ -184,6 +187,55 @@ def test_secrets_are_masked_before_writing(store):
   row = store.search_fts("deploy", k=1)[0]
   assert secret not in row["content"]
   assert store.search_fts("a1B2c3D4e5F6g7H8i9J0", k=1) == []  # not in the FTS index either
+
+
+def _fake(prefix: str, body: str) -> str:
+  # Built at runtime so no secret-shaped literal sits in the repository.
+  return prefix + body
+
+
+def _stored_metadata(store, chunk_id):
+  return store._connect().execute("SELECT metadata FROM chunks WHERE id = ?", (chunk_id,)).fetchone()[0]
+
+
+def test_metadata_is_masked_value_by_value(store, tmp_path):
+  # json.dumps escapes quotes and newlines and turns {"api_key": v} into '"api_key": "v"': masked after
+  # that, `password=` and `name: value` are no longer recognised, while the same text in `content` is.
+  pw = _fake("Xq7pL2", "wzR9kT4m")
+  token = _fake("ghp_", "A1b2C3d4E5f6G7h8I9j0K1l2")
+  other = _fake("ghp_", "Z9y8X7w6V5u4T3s2R1q0P9o8")
+
+  class Opaque:  # stringified by json.dumps(default=str)
+    def __str__(self):
+      return f"line 1\npassword={pw}"
+
+  meta = {"cmd": f'export DB_PASSWORD="{pw}"', "note": f"line 1\npassword={pw}", "api_key": pw,
+          "nested": {"steps": [f"use {token} once", "then rotate"]}, "count": 3, "label": "plain words"}
+  store.upsert([{"id": "m", "source": "s", "type": "topic", "content": "deploy notes",
+                 "metadata": {**meta, "object": Opaque(), other: "a key is masked too"}}])
+  raw = _stored_metadata(store, "m")
+  assert pw not in raw and token not in raw and other not in raw
+  kept = json.loads(raw)
+  assert kept["api_key"] == MARK and kept["cmd"].startswith("export DB_PASSWORD=")
+  assert (kept["count"], kept["label"], kept["nested"]["steps"][1]) == (3, "plain words", "then rotate")
+  plain = SqliteVecStore(tmp_path / "plain.db", dim=EMB.dim, redact_secrets=False)
+  plain.upsert([{"id": "m", "source": "s", "type": "topic", "content": "deploy notes", "metadata": meta}])
+  assert json.loads(_stored_metadata(plain, "m")) == meta  # masking switched off: stored as given
+  plain.close()
+
+
+def test_the_embedder_only_sees_masked_text(store):
+  token = _fake("ghp_", "A1b2C3d4E5f6G7h8I9j0K1l2")
+  pw = _fake("Xq7pL2", "wzR9kT4m")
+  emb = CountingEmbedder()
+  store.add_documents([{"id": "d", "content": f"rotate the CI token {token} on monday"}], emb)
+  store.replace_source("s", "topic", "h1", [_bare_chunk(0, f"password={pw} for the backup box")], embedder=emb)
+  assert len(emb.texts) == 2 and all(MARK in text for text in emb.texts)
+  assert not any(token in text or pw in text for text in emb.texts)
+  # The vector stored is the one of the text stored, so a search on the masked text finds it exactly.
+  stored = store.search_fts("rotate", k=1)[0]["content"]
+  hit = store.search(EMB.embed([stored])[0], k=1)[0]
+  assert hit["id"] == "d" and hit["distance"] < 1e-6
 
 
 def test_read_only_store(tmp_path):
