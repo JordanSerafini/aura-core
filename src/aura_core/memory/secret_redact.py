@@ -35,6 +35,12 @@ MIN_MIXED_VALUE_LENGTH = 8
 _CREDENTIAL_NAME = re.compile(
   r"(?i)(?:^|[_-])(?:key|apikey|token|jeton|secret|password|passwd|psswd|pwd|pass|credential|auth)(?:[_-]|$)"
 )
+# Field names that hold a credential, for records masked field by field (store metadata). Narrower than
+# _ASSIGNMENT on purpose: in a record, `key`, `sort_key` or `auth` are ordinary settings. The credential
+# word ends the name: `access_token` holds one, `token_count` does not.
+_CREDENTIAL_FIELD = re.compile(
+  r"(?:^|_)(?:password|passwd|psswd|pwd|secret|token|credentials?|(?:api|secret|access|private)_?key)$"
+)
 _PLACEHOLDERS = frozenset({"changeme", "change-me", "example", "placeholder", "your-key-here"})
 
 _PEM = re.compile(
@@ -122,6 +128,12 @@ def clean(text: str) -> str:
   """Both layers: exact values from `AURA_CORE_ENV_FILE`, then patterns."""
   text, _ = mask_env_values(text)
   return redact(text)
+
+
+def credential_field(name: str) -> bool:
+  """True for a field name that holds a credential: `password`, `DB_PASSWORD`, `apiKey`, `client-secret`."""
+  snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).lower().replace("-", "_").replace(".", "_")
+  return bool(_CREDENTIAL_FIELD.search(snake))
 
 
 def has_secret(text: str) -> bool:

@@ -199,8 +199,8 @@ def _stored_metadata(store, chunk_id):
 
 
 def test_metadata_is_masked_value_by_value(store, tmp_path):
-  # json.dumps escapes quotes and newlines and turns {"api_key": v} into '"api_key": "v"': masked after
-  # that, `password=` and `name: value` are no longer recognised, while the same text in `content` is.
+  # json.dumps escapes quotes and turns {"api_key": v} into '"api_key": "v"': masked after that,
+  # `password="..."` and `name: value` are no longer recognised, while the same text in `content` is.
   pw = _fake("Xq7pL2", "wzR9kT4m")
   token = _fake("ghp_", "A1b2C3d4E5f6G7h8I9j0K1l2")
   other = _fake("ghp_", "Z9y8X7w6V5u4T3s2R1q0P9o8")
@@ -222,6 +222,22 @@ def test_metadata_is_masked_value_by_value(store, tmp_path):
   plain.upsert([{"id": "m", "source": "s", "type": "topic", "content": "deploy notes", "metadata": meta}])
   assert json.loads(_stored_metadata(plain, "m")) == meta  # masking switched off: stored as given
   plain.close()
+
+
+def test_ordinary_metadata_fields_stay_readable(store):
+  # A field is masked as `name=value` only when its name holds a credential. In a record, `key`, `sort_key`
+  # or `auth` are ordinary settings: the same words in prose (`auth=...`) are still masked in `content`.
+  pw = _fake("Xq7pL2", "wzR9kT4m")
+  ordinary = {"key": "notes/backup-policy.md", "sort_key": "title_asc", "auth": "required",
+              "token_count": "125000", "token_type": "refresh", "password_policy": "rotate yearly",
+              "passage": "chapter two", "max_tokens": 4096}
+  secret = {"password": pw, "DB_PASSWORD": pw, "apiKey": pw, "client_secret": pw, "access-token": pw,
+            "privateKey": pw, "clientSecret": pw, "accessToken": pw, "aws_secret_access_key": pw, "credentials": pw}
+  store.upsert([{"id": "m", "source": "s", "type": "topic", "content": "deploy notes",
+                 "metadata": {**ordinary, **secret}}])
+  kept = json.loads(_stored_metadata(store, "m"))
+  assert {k: kept[k] for k in ordinary} == ordinary
+  assert {k: kept[k] for k in secret} == dict.fromkeys(secret, MARK)
 
 
 def test_the_embedder_only_sees_masked_text(store):
