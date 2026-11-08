@@ -297,3 +297,14 @@ def test_mark_source_indexed_without_chunks(store):
   assert store.is_indexed("notes/a.md", "h1") and not store.is_indexed("notes/a.md", "h2")
   store.mark_source_indexed("notes/a.md", "note", "h2", 3)
   assert store.get_source_hash("notes/a.md") == "h2"
+
+
+def test_null_metadata_reads_back_as_a_dict(store):
+  # A chunk upserted with metadata=None (or a list) used to read back as None,
+  # and search_hybrid then crashed on entry["metadata"].get for every query
+  # that touched it.
+  store.add_documents([{"id": "n", "content": "The ferry leaves at dawn", "metadata": None},
+                       {"id": "l", "content": "The ferry returns at dusk", "metadata": ["x"]}], EMB)
+  assert all(h["metadata"] == {} for h in store.search_fts("ferry", k=5))
+  q = "ferry"
+  assert {h["id"] for h in store.search_hybrid(EMB.embed([q])[0], q, k=5)} == {"n", "l"}

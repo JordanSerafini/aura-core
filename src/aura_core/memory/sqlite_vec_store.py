@@ -370,10 +370,13 @@ class SqliteVecStore:
 
   @staticmethod
   def _meta(raw: str | None) -> dict:
+    # Read-side guard: a chunk upserted with metadata=None or a list is stored
+    # as JSON null/array; callers (search_hybrid) expect a dict.
     try:
-      return json.loads(raw) if raw else {}
+      meta = json.loads(raw) if raw else {}
     except ValueError:
       return {}
+    return meta if isinstance(meta, dict) else {}
 
   def search(self, query_embedding: list[float], k: int = 5, filter_type=None,
              filter_source: str | None = None, filter_id_prefix: str | None = None,
