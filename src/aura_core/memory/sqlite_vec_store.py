@@ -11,7 +11,8 @@ Embeddings are optional per chunk: a chunk without a vector is still found by
 the BM25 (FTS5) side, which is what the lexical-only mode relies on.
 
 `search_hybrid` fuses the vector ranking and the BM25 ranking with Reciprocal
-Rank Fusion, then applies small recency and importance priors.
+Rank Fusion (`fusion.rrf_term`, shared with `retrieval`), then applies small
+recency and importance priors.
 """
 
 import hashlib
@@ -28,6 +29,7 @@ import sqlite_vec
 
 from aura_core.config import default_memory_db
 from aura_core.memory.embed_engine import DEFAULT_DIM, Embedder
+from aura_core.memory.fusion import RRF_K, rrf_term
 from aura_core.memory.secret_redact import clean, clean_record
 
 
@@ -49,9 +51,11 @@ class SqliteVecStore:
   """Vector + BM25 store in one SQLite file."""
 
   def __init__(self, db_path: Path | str | None = None, *, dim: int | None = None,
-               read_only: bool = False, redact_secrets: bool = True):
+               read_only: bool = False, redact_secrets: bool = True, timeout: float = 10.0):
+    """`timeout`: seconds to wait for a lock held by a writer (a caller on a deadline passes less)."""
     self.db_path = Path(db_path) if db_path else default_memory_db()
     self.read_only = read_only
+    self.timeout = timeout
     self.redact_secrets = redact_secrets
     self._conn: sqlite3.Connection | None = None
     self._requested_dim = dim
@@ -67,13 +71,14 @@ class SqliteVecStore:
   def _connect(self) -> sqlite3.Connection:
     if self._conn is None:
       if self.read_only:
-        conn = sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
+        # as_uri() escapes `#`, `?` and `%`, which a `file:` URI would otherwise read as URI syntax.
+        conn = sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=self.timeout)
         conn.execute("PRAGMA query_only = ON")
       else:
-        conn = sqlite3.connect(str(self.db_path), timeout=10)
+        conn = sqlite3.connect(str(self.db_path), timeout=self.timeout)
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
-      conn.execute("PRAGMA busy_timeout = 10000")
+      conn.execute(f"PRAGMA busy_timeout = {int(self.timeout * 1000)}")
       conn.enable_load_extension(True)
       sqlite_vec.load(conn)
       conn.enable_load_extension(False)
@@ -365,7 +370,7 @@ class SqliteVecStore:
   def search(self, query_embedding: list[float], k: int = 5, filter_type=None,
              filter_source: str | None = None, filter_id_prefix: str | None = None,
              filter_rowids: list[int] | None = None) -> list[dict]:
-    """k-NN vector search. Returns dicts {id, source, type, content, mtime, distance, metadata}.
+    """k-NN vector search. Returns dicts {rowid, id, source, type, content, mtime, distance, metadata}.
 
     Filters are applied to the CANDIDATE set before the k-NN is computed:
     filtering after the join would return nothing whenever the global nearest
@@ -389,14 +394,14 @@ class SqliteVecStore:
       params.extend(filter_rowids)
     candidate = ("AND v.rowid IN (SELECT rowid FROM chunks WHERE " + " AND ".join(where) + ")") if where else ""
     sql = f"""
-      SELECT c.id, c.source, c.type, c.content, c.mtime, c.metadata, v.distance
+      SELECT c.rowid, c.id, c.source, c.type, c.content, c.mtime, c.metadata, v.distance
       FROM vec_chunks v JOIN chunks c ON c.rowid = v.rowid
       WHERE v.embedding MATCH ? AND k = ? {candidate}
       ORDER BY v.distance
     """
     rows = self._connect().execute(sql, [_serialize_vec(query_embedding), k, *params]).fetchall()
     return [
-      {"id": r["id"], "source": r["source"], "type": r["type"], "content": r["content"],
+      {"rowid": r["rowid"], "id": r["id"], "source": r["source"], "type": r["type"], "content": r["content"],
        "mtime": r["mtime"], "distance": r["distance"], "metadata": self._meta(r["metadata"])}
       for r in rows
     ]
@@ -415,7 +420,7 @@ class SqliteVecStore:
 
   def search_fts(self, query: str, k: int = 5, filter_type=None, filter_source: str | None = None,
                  filter_rowids: list[int] | None = None) -> list[dict]:
-    """BM25 full-text search. `score` is the bm25 value: lower is better."""
+    """BM25 full-text search, dicts like `search` with `score` (the bm25 value: lower is better)."""
     match = self.fts_query(query)
     if match is None:
       return []
@@ -433,7 +438,7 @@ class SqliteVecStore:
       where.append("c.rowid IN (" + ",".join("?" for _ in filter_rowids) + ")")
       params.extend(filter_rowids)
     sql = f"""
-      SELECT c.id, c.source, c.type, c.content, c.mtime, c.metadata, bm25(chunks_fts) AS score
+      SELECT c.rowid, c.id, c.source, c.type, c.content, c.mtime, c.metadata, bm25(chunks_fts) AS score
       FROM chunks_fts JOIN chunks c ON c.rowid = chunks_fts.rowid
       WHERE {" AND ".join(where)}
       ORDER BY score LIMIT ?
@@ -443,7 +448,7 @@ class SqliteVecStore:
     except sqlite3.OperationalError:
       return []
     return [
-      {"id": r["id"], "source": r["source"], "type": r["type"], "content": r["content"],
+      {"rowid": r["rowid"], "id": r["id"], "source": r["source"], "type": r["type"], "content": r["content"],
        "mtime": r["mtime"], "score": r["score"], "metadata": self._meta(r["metadata"])}
       for r in rows
     ]
@@ -460,11 +465,11 @@ class SqliteVecStore:
 
   def search_hybrid(self, query_embedding: list[float] | None, query_text: str, k: int = 5,
                     filter_type=None, filter_source: str | None = None, pool: int = 20,
-                    rrf_k: int = 60, recency_weight: float = 0.15,
+                    rrf_k: int = RRF_K, recency_weight: float = 0.15,
                     importance_weight: float = 0.05) -> list[dict]:
     """Vector + BM25 fusion by Reciprocal Rank Fusion.
 
-    RRF: score(doc) = sum over lists of 1 / (rrf_k + rank). Only ranks matter,
+    RRF: score(doc) = sum over lists of 1 / (rrf_k + rank), rank from 1 (`fusion`). Only ranks matter,
     so heterogeneous scales (cosine distance vs bm25) never need calibrating.
     `pool` is how deep each list is read before fusion. With
     `query_embedding=None` this degrades to BM25 only.
@@ -486,7 +491,7 @@ class SqliteVecStore:
           "mtime": r.get("mtime"), "metadata": r["metadata"],
           "rrf_score": 0.0, "vec_rank": None, "fts_rank": None,
         })
-        e["rrf_score"] += 1.0 / (rrf_k + rank + 1)
+        e["rrf_score"] += rrf_term(rank + 1, rrf_k)
         e[rank_key] = rank + 1
 
     _fuse(vec_results, "vec_rank", fused)
@@ -515,7 +520,7 @@ class SqliteVecStore:
       r"\b(recent|latest|current|now|today|yesterday|actuel|maintenant|aujourd'hui|hier)\b",
       query_text, flags=re.IGNORECASE))
     effective_recency_weight = recency_weight * (2 if temporal_query else 1)
-    max_rank_score = 1.0 / (rrf_k + 1)
+    max_rank_score = rrf_term(1, rrf_k)
     now_ts = time.time()
     for entry in fused.values():
       mtime = entry.get("mtime")

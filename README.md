@@ -18,7 +18,8 @@ Figures from the private instance (not reproducible from this repo, counted 2026
 
 ```
 src/aura_core/
-  memory/      sqlite_vec_store.py   store: chunks, FTS5, vec0, RRF fusion
+  memory/      sqlite_vec_store.py   store: chunks, FTS5, vec0, hybrid search
+               fusion.py             Reciprocal Rank Fusion, shared by the store and retrieval
                embed_engine.py       embedders (sentence-transformers, hashing)
                reranker.py           optional cross-encoder
                retrieval.py          ambient recall: up to 2 short extracts for a prompt, abstains when unsure

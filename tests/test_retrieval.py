@@ -1,7 +1,16 @@
+import inspect
+import sqlite3
+
 import pytest
 
 from aura_core.memory.embed_engine import HashingEmbedder
-from aura_core.memory.retrieval import EMBED_MAX_CHARS, conversation_context, embed_text, prompt_selection
+from aura_core.memory.retrieval import (
+  EMBED_MAX_CHARS,
+  conversation_context,
+  embed_text,
+  prompt_selection,
+  semantic_rows,
+)
 from aura_core.memory.sqlite_vec_store import SqliteVecStore
 
 EMB = HashingEmbedder(dim=64)
@@ -188,3 +197,83 @@ def test_a_long_prompt_reaches_the_embedder_capped(db):
   prompt = "where are the lifejackets stored " + "and also " * 200
   prompt_selection(prompt, "s", db=db, embedder=spy, context="previous reply about the ferry")
   assert sent and len(sent[0]) <= EMBED_MAX_CHARS and sent[0].startswith("where are the lifejackets")
+
+
+def test_a_prompt_without_accents_counts_accented_words(tmp_path):
+  # FTS folds diacritics ("ecluse" finds "Écluse"), the coverage count compared exact words: 0 covered words,
+  # and the extract the keyword side had found was dropped. Folded on both sides, either way round.
+  path = _store(tmp_path, [
+    {"id": "1", "content": "Écluse amont : vanne manuelle réglée au niveau deux", "source": "amont.md"},
+    {"id": "2", "content": "Ecluse aval : pompe de relevage hors service", "source": "aval.md"},
+    {"id": "3", "content": "Horaires du bac entre les deux rives", "source": "bac.md"},
+  ])
+  picked = prompt_selection("ecluse reglee", "s", db=path)
+  assert picked and picked[0][2] == "amont.md"
+  picked = prompt_selection("écluse relevage", "s", db=path)
+  assert picked and picked[0][2] == "aval.md"
+
+
+def test_a_missing_database_abstains_even_with_an_identifier(tmp_path):
+  # The identifier check sat outside the `try`: a missing database raised OperationalError into the caller.
+  missing = tmp_path / "absent.db"
+  for embedder in (None, EMB):
+    assert prompt_selection("what happened in INC-4471 hydraulic hose", "s", db=missing, embedder=embedder) == []
+  assert not missing.exists()  # opened read only: nothing created
+
+
+def test_a_database_path_with_uri_characters_is_read(tmp_path):
+  # f"file:{db}?mode=ro" took `#` for a fragment and `?` for a query: the path was cut there, SQLite opened
+  # (read-write, the mode being cut off too) another file, and both sides returned [] in silence.
+  docs = [{"id": "1", "content": "Lifejackets are stored under the benches on the main deck", "source": "a.md"},
+          {"id": "2", "content": "Ferry timetable: weekday departures at dawn and noon", "source": "b.md"}]
+  for sub in ("with#hash", "with?mark", "with%25percent", "with space"):
+    (tmp_path / sub).mkdir()
+    path = _store(tmp_path / sub, docs)
+    assert prompt_selection("where are the lifejackets stored on deck", "s", db=path), sub
+    assert prompt_selection("what happened in INC-4471 lifejackets deck", "s", db=path) == [], sub
+    assert semantic_rows(path, "lifejackets stored", lambda t: EMB.embed([t])[0], ("topic",), {}), sub
+  assert sorted(p.name for p in tmp_path.iterdir()) == sorted(("with#hash", "with?mark", "with%25percent",
+                                                                "with space"))
+
+
+def test_every_connection_is_closed(db, monkeypatch):
+  # `with sqlite3.connect(...) as conn` commits or rolls back, it does not close: two connections per call leaked.
+  opened = []
+  real = sqlite3.connect
+
+  def spy(*args, **kwargs):
+    conn = real(*args, **kwargs)
+    opened.append(conn)
+    return conn
+
+  monkeypatch.setattr(sqlite3, "connect", spy)
+  assert prompt_selection("what happened in INC-4471 hydraulic hose", "s", db=db, embedder=EMB)
+  assert prompt_selection("ferry timetable weekday departures", "s", db=db)
+  assert len(opened) >= 3
+  for conn in opened:
+    with pytest.raises(sqlite3.ProgrammingError):
+      conn.execute("SELECT 1")
+
+
+def test_the_vector_side_is_the_store_search_and_rrf_is_shared(db):
+  # retrieval had its own copy of the k-NN (sqlite_vec, struct.pack, the SQL) and of RRF, with ranks shifted by
+  # one against the store's search_hybrid.
+  from aura_core.memory import fusion, retrieval, sqlite_vec_store
+
+  source = inspect.getsource(retrieval)
+  assert "struct" not in source and "import sqlite_vec\n" not in source and "MATCH ? AND k" not in source
+  assert retrieval.rrf_scores is fusion.rrf_scores and sqlite_vec_store.rrf_term is fusion.rrf_term
+  assert fusion.rrf_term(1) == 1 / (fusion.RRF_K + 1)
+  vec = EMB.embed(["lifejackets stored on deck"])[0]
+  store = SqliteVecStore(db, read_only=True)
+  try:
+    expected = [(h["rowid"], h["type"], h["source"], h["content"][:200])
+                for h in store.search(vec, k=6, filter_type=["topic", "note"])]
+  finally:
+    store.close()
+  timing = {}
+  assert semantic_rows(db, "lifejackets stored on deck", lambda t: EMB.embed([t])[0], ("topic", "note"),
+                       timing) == expected and "embed_fallback" not in timing
+  # An Embedder object is accepted too: it used to raise inside, and the vector side was dropped in silence.
+  assert semantic_rows(db, "lifejackets stored on deck", EMB, ("topic", "note"), timing) == expected
+  assert semantic_rows(db, "lifejackets stored on deck", EMB, (), {}) == []  # no type asked, nothing returned
