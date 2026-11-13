@@ -88,6 +88,29 @@ def test_a_secret_printed_by_a_task_is_masked_in_the_history(history, tmp_path):
   assert pw not in repr(rows) and rows[0]["output_tail"] == result.output_tail
 
 
+def test_a_secret_printed_as_json_or_as_an_option_is_masked(history, tmp_path):
+  # A task that prints a dict or a JSON document writes `"password": "..."`: the quote after the name hid it.
+  pw = _fake("Zq9xLm2", "Rt7vWb4Nc8")
+  text = f'{{"user": "bob", "password": "{pw}"}}\n' + f"{{'api_key': '{pw}'}}\n" + f"login --password {pw} -v\n"
+  result = execute_task(_printing(tmp_path, text), history)
+  assert pw not in result.output_tail and result.output_tail.count(MARK) == 3
+  assert '"user": "bob"' in result.output_tail
+
+
+def test_the_adaptive_fingerprint_sees_a_rotated_secret(history, tmp_path):
+  # The tail is masked, the fingerprint is not: two outputs that differ only by a secret mask to the same tail,
+  # yet they are two different outputs, not one output seen twice in a row.
+  out = tmp_path / "out.txt"
+  task = one(f"- [ ] `cat {out}` -- [local] [adaptive:4] prints a file")
+  second = _fake("Lm3nB8", "vcX1zQ6r")
+  for value in (_fake("Xq7pL2", "wzR9kT4m"), second):
+    out.write_text(f"password={value}\n")
+    first = execute_task(task, history)
+  assert history.adaptive_state(task.task_id)[1] == 0
+  execute_task(task, history)  # the same output again: counted as unchanged, so the check above is not vacuous
+  assert history.adaptive_state(task.task_id)[1] == 1 and first.output_tail == f"password={MARK}\n"
+
+
 def test_a_secret_cut_by_the_tail_is_masked_before_the_cut(history, tmp_path):
   # Cut first, the tail started in the middle of the value: its last 7 characters, with no `password=` left in
   # front of them, no longer looked like a secret.

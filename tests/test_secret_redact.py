@@ -1,3 +1,4 @@
+import json
 import time
 
 from aura_core.memory.secret_redact import (
@@ -189,3 +190,27 @@ def test_secret_field_masks_numbers_but_not_token_counters():
   # Under a counter name, a string is still a secret; references and unset markers stay readable.
   assert secret_field("tokens", _fake("ghp_", "A1b2C3d4E5f6G7h8I9j0K1l2")) and secret_field("passwords", "a b")
   assert not secret_field("secret", "$DB_PASS") and not secret_field("password", "None")
+
+
+def test_quoted_names_and_long_options_are_read_as_assignments():
+  pw = _fake("Zq9xLm2", "Rt7vWb4Nc8")
+  # A quoted name is judged as a record field and its value is masked inside its quotes: JSON stays valid.
+  assert json.loads(clean(json.dumps({"password": pw, "pin_passwords": 12345678, "user": "bob"}))) == {
+    "password": MARK, "pin_passwords": MARK, "user": "bob"}
+  assert clean(f"{{'api_key': '{pw}', 'user': 'bob'}}") == f"{{'api_key': '{MARK}', 'user': 'bob'}}"
+  escaped = json.dumps({"password": pw + '"' + pw})  # an escaped quote does not end the value
+  assert pw not in clean(escaped) and json.loads(clean(escaped)) == {"password": MARK}
+  assert clean(f"login --password {pw} -v") == f"login --password {MARK} -v"
+  assert clean(f"login --token '{pw}'") == f"login --token {MARK}"
+  ordinary = json.dumps({"sort_key": "title_asc", "auth": "oauth2", "max_tokens": 4096, "pwd": True,
+                         "client_secret": None, "secret": "$DB_PASS", "credentials": {"user": "bob"}})
+  for text in ('{"monkey": "bananas123"}', '{"tokenizer": "default_v2"}', "login --password $DB_PASS",
+               "login --password-file /etc/app/pw.txt", 'it says "password": none', ordinary):
+    assert clean(text) == text, text
+
+
+def test_only_usage_counters_keep_a_number_under_tokens():
+  for name in ("tokens", "max_tokens", "cache_read_input_tokens", "completionTokens", "total_tokens"):
+    assert not secret_field(name, 4096), name
+  for name in ("access_tokens", "refresh_tokens", "auth_tokens", "api_tokens"):
+    assert secret_field(name, 123456789012), name

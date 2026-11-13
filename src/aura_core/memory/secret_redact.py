@@ -10,10 +10,11 @@ Two layers, both conservative:
    construction: only exact values from the file are masked.
 2. `redact`: pattern masking for text that was never in an env file: PEM
    private keys, well-known token prefixes, `name=value` assignments with a
-   credential-looking name, `Authorization: Bearer ...`, credentials
-   embedded in URLs, and the usual command lines that carry a password
-   (`PGPASSWORD=... psql`, `sshpass -p`, `mysql -p...`, `curl -u <user>:<password>`,
-   `echo ... | sudo -S`).
+   credential-looking name (quoted names too, as JSON prints them),
+   `Authorization: Bearer ...`, credentials embedded in URLs, and the usual
+   command lines that carry a password (`PGPASSWORD=... psql`, `sshpass -p`,
+   `mysql -p...`, `curl -u <user>:<password>`, `echo ... | sudo -S`,
+   `--password X`).
 
 `clean` applies both. `clean_record` applies it to a JSON-like record value by
 value and masks whole the fields whose name holds a credential (store
@@ -25,6 +26,7 @@ This is a safety net, not a guarantee. Pattern masking misses secrets with no
 recognisable shape, so do not index material you would not want to leak.
 """
 
+import json
 import os
 import re
 from pathlib import Path
@@ -46,8 +48,12 @@ _CREDENTIAL_FIELD = re.compile(
   r"(?:^|_)(?:password|passwd|psswd|passphrase|pass|pwd|pw|secret|token|authorization|credential"
   r"|(?:api|secret|access|private)_?key)s?$"
 )
-# A NUMBER under a name that ends with `tokens` (`max_tokens`, `input_tokens`) counts a model's tokens.
-_TOKEN_COUNTER = re.compile(r"(?:^|_)tokens$")
+# A NUMBER under `tokens` or a usage counter name (`max_tokens`, `input_tokens`, `cache_read_input_tokens`)
+# counts a model's tokens. A closed list: `access_tokens: 123456789012` is a credential, not a counter.
+_TOKEN_COUNTER = re.compile(
+  r"^(?:(?:\w+_)?(?:max|min|input|output|prompt|completion|total|cached|reasoning|context|num|n|used|remaining)_)?"
+  r"tokens$"
+)
 # Upper-case names where the credential word is glued to another one: PGPASSWORD, MYSQLTOKEN, SSHPASS.
 _GLUED_NAME = r"[A-Z0-9_]{0,60}(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)|SSHPASS"
 _UNSET = frozenset({"none", "null", "true", "false"})
@@ -72,19 +78,29 @@ _URL_CREDENTIAL = re.compile(
 # a camelCase suffix on purpose, so "oAuth: enabled" stays readable.
 _CREDENTIAL_WORD = re.compile(r"(?i)key|token|secret|password|passwd|pwd|credentials?|auth")
 _CREDENTIAL_CAMEL = re.compile(r"[a-z0-9]+(?:Key|Token|Secret|Password|Credentials?)")
-# `name: value` or `name=value`. The name (letters and digits, any alphabet, joined by `_`, `.` or `-`) is read
-# whole, from where it starts (not after a word character, nor inside `a-b` or `a.b`), and checked segment by
-# segment in Python; the value is read only after a credential name. A single regex looking for the credential word anywhere in the name took cubic time on
+# `name: value` or `name=value`, and a quoted name as JSON or a printed dict writes it (`"name": "value"`). The
+# name (letters and digits, any alphabet, joined by `_`, `.` or `-`) is read whole, from where it starts (not after
+# a word character, nor inside `a-b` or `a.b`), and checked segment by segment in Python; the value is read only
+# after a credential name. A single regex looking for the credential word anywhere in the name took cubic time on
 # `token-token-token...` (6 s for 3 KB, minutes for 100 KB).
-_ASSIGNMENT_KEY = re.compile(r"(?<!\w)(?<![^\W_][.-])(?P<name>_*[^\W_]+(?:[_.-]+[^\W_]+)*)\s*[:=]\s*")
+_ASSIGNMENT_KEY = re.compile(
+  r"(?<!\w)(?<![^\W_][.-])(?P<name>_*[^\W_]+(?:[_.-]+[^\W_]+)*)(?P<q>['\"])?\s*[:=]\s*"
+)
 _ASSIGNMENT_VALUE = re.compile(r"'[^'\n]+'|\"[^\"\n]+\"|[^\s'\";,]+")
+# The value of a quoted name: a quoted string (escaped quotes included) or a bare scalar, which ends at `}` or `]`.
+_FIELD_VALUE = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"|[^\s'\",;}\]]+")
+_NUMBER = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
 
 # Command lines, where the credential word is glued to another one or the value follows a flag:
 #   PGPASSWORD=... psql   sshpass -p '...' ssh   mysql -uroot -p...   curl -u <user>:<password>   echo '...' | sudo -S
+#   any-cli --password '...'   any-cli --token ...
 # Each form is anchored on an explicit keyword or command, so a bare `-p` or `-u` elsewhere is left alone.
 _CMD_VALUE = r"""(?P<val>'[^'\n]*'|"[^"\n]*"|[^\s'"`;|&<>)]+)"""
 _GLUED_ENV = re.compile(r"(?<![A-Za-z0-9_])(?P<key>" + _GLUED_NAME + r")(?P<sep>\s*=\s*)" + _CMD_VALUE)
 _COMMAND_FORMS = (
+  # A long option followed by its value, `--password X` (`--password=X` is an assignment).
+  re.compile(r"(?P<key>(?<![\w-])--(?:password|passwd|pass|secret|token|api-?key|access-token|auth-token)\s+)"
+             + _CMD_VALUE),
   re.compile(r"(?P<key>\bsshpass\s+(?:-[A-Za-oq-z]\S*\s+)*-p\s*)" + _CMD_VALUE),
   re.compile(r"(?P<key>\b(?:mysql(?:dump|admin|import|check|show)?|mariadb(?:-dump)?)\b[^\n|;&]{0,300}?\s-p)"
              + _CMD_VALUE),
@@ -145,10 +161,50 @@ def _credential_name(name: str) -> bool:
   return any(_CREDENTIAL_WORD.fullmatch(part) or _CREDENTIAL_CAMEL.fullmatch(part) for part in re.split(r"[_.-]+", name))
 
 
+def _json_string(raw: str) -> str:
+  # Escapes decoded, so `" $DB_PASS\\n"` is read as the reference it is.
+  try:
+    value = json.loads(raw)
+  except ValueError:
+    return raw[1:-1]
+  return value if isinstance(value, str) else raw[1:-1]
+
+
+def _masked_field(text: str, key: re.Match) -> re.Match | None:
+  """The value to mask after a quoted name (`"password": "..."`), or None.
+
+  A quoted name is a record field, written by json.dumps or a printed dict, so it is judged like one
+  (`secret_field`): `"sort_key"` or `"auth"` stay readable, a number under `"password"` does not, a token counter
+  does. A nested object or list (`"credentials": {...}`) is left to `clean_record`, which reads it whole.
+  """
+  quote = key.group("q")
+  if text[key.start() - 1:key.start()] != quote or text[key.end():key.end() + 1] in ("{", "["):
+    return None
+  if not (found := _FIELD_VALUE.match(text, key.end())):
+    return None
+  raw = found.group()
+  if raw[0] == '"':
+    value = _json_string(raw)
+  elif raw[0] == "'":
+    value = raw[1:-1]
+  elif _NUMBER.fullmatch(raw):
+    value = float(raw)
+  else:
+    value = None if raw.lower() in _UNSET else raw
+  return found if secret_field(key.group("name"), value) else None
+
+
 def _mask_assignments(text: str) -> str:
   out, done, start = [], 0, 0
   while key := _ASSIGNMENT_KEY.search(text, start):
     start = key.end()
+    if key.group("q"):
+      # Masked inside quotes, so the JSON a store writes stays valid: `"password": "[REDACTED]"`.
+      if found := _masked_field(text, key):
+        quote = found.group()[0] if found.group()[0] in "'\"" else key.group("q")
+        out += [text[done:start], quote + MARK + quote]
+        done = start = found.end()
+      continue
     if not _credential_name(key.group("name")):
       continue
     # Leave references and obvious placeholders alone: `token=$TOKEN`, `key=<your key>`. A value left in clear
