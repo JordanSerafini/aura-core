@@ -63,7 +63,7 @@ for hit in store.search_hybrid(emb.embed([q])[0], q, k=2):
 
 With `query_embedding=None`, `search_hybrid` degrades to BM25 only.
 
-Content and metadata go through `secret_redact` before they are written, and the embedder only ever sees the masked text (an `Embedder` can be a remote service). Metadata is masked field by field before `json.dumps`, which escapes the quotes a pattern relies on, and a field whose name holds a credential (`password`, `PGPASSWORD`, `apiKey`, `client_secret`) is masked whole, whatever its value. Besides `name=value` assignments, the patterns cover the usual command lines that carry a password: `PGPASSWORD=... psql`, `sshpass -p`, `mysql -p...`, `curl -u`, `echo ... | sudo -S`. Masking works on whole texts: if you split documents yourself, run `secret_redact.clean()` on the document before splitting it, because a secret cut across two chunks no longer looks like one.
+Content and metadata go through `secret_redact` before they are written, and the embedder only ever sees the masked text (an `Embedder` can be a remote service). Metadata is masked field by field before `json.dumps`, which escapes the quotes a pattern relies on, and a field whose name holds a credential (`password`, `PGPASSWORD`, `apiKey`, `client_secret`, plurals like `api_keys`) is masked whole, numbers included (`password: 12345678`). The name carries down: every value nested below `credentials` or `api_keys` is judged under that name. A reference (`$DB_PASS`, `<your key>`), a bool or null stays readable, and so does a number under a name ending in `tokens` (`max_tokens`, `input_tokens`): that is a model's token counter, not a secret. Besides `name=value` assignments, the patterns cover the usual command lines that carry a password: `PGPASSWORD=... psql`, `sshpass -p`, `mysql -p...`, `curl -u`, `echo ... | sudo -S`. Masking works on whole texts: if you split documents yourself, run `secret_redact.clean()` on the document before splitting it, because a secret cut across two chunks no longer looks like one.
 
 To re-index a file that changed, `store.replace_source(source, type_, file_hash, chunks, embedder=emb)` swaps all its chunks in one transaction and only embeds the chunks whose text is new. The others keep their stored vector.
 
@@ -75,6 +75,8 @@ aura-core-eval --embedder hashing      # also exercises the vector path, offline
 aura-core-eval --embedder st --rerank  # real embeddings + cross-encoder (downloads models)
 aura-core-eval --corpus my_corpus.json --truth my_truth.json --misses
 ```
+
+With `--rerank`, a cross-encoder that cannot load or score (sentence-transformers missing, or `AURA_CORE_OFFLINE=1` with no cached weights) is reported as `unavailable` with its reason, never scored, and the command exits with code 1. So does `--rerank` with the lexical embedder, which has no vectors to rerank.
 
 Result of `--embedder hashing` on the bundled synthetic data (what I ran here):
 
@@ -115,7 +117,7 @@ Runs the scheduler drops while it is running are recorded too:
 - The hashing embedder is for tests and offline runs only.
 - Single process, single writer. No auth, not meant to be exposed on a network.
 - `secret_redact` is pattern based. It reduces the chance of indexing a credential, it does not guarantee it. It is tuned for notes, logs and shell commands, not source code, where `password = get_password()` gets masked too.
-- The scheduler stores the last 2,000 characters of each run's output as they are, unmasked: keep secrets out of what your tasks print.
+- The scheduler stores the last 2,000 characters of each run's output after `secret_redact`: the last 64,000 characters are masked first, then cut, so a secret cut in two by the tail is still caught. It is the same pattern-based safety net, not a guarantee: keep secrets out of what your tasks print.
 - Extracted from a larger personal project: some design choices only make sense in that context.
 
 ## Beyond this repo

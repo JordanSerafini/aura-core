@@ -28,6 +28,7 @@ from aura_core.heartbeat.runner import (
   run_once,
   sync_jobs,
 )
+from aura_core.memory.secret_redact import MARK
 
 
 @pytest.fixture
@@ -65,6 +66,59 @@ def test_timeout_does_not_wait_for_a_process_that_left_the_group(history, monkey
   result = execute_task(task, history)
   assert result.status == "timeout" and time.monotonic() - t0 < 4
   assert "started" in result.output_tail and "[killed after 1s]" in result.output_tail
+
+
+def _fake(prefix: str, body: str) -> str:
+  # Built at runtime so no secret-shaped literal sits in the repository.
+  return prefix + body
+
+
+def _printing(tmp_path, text):
+  """A task that prints `text` as is. The text sits in a file so the command line does not carry it."""
+  out = tmp_path / "out.txt"
+  out.write_text(text)
+  return one(f"- [ ] `cat {out}` -- [local] prints a file")
+
+
+def test_a_secret_printed_by_a_task_is_masked_in_the_history(history, tmp_path):
+  pw = _fake("Xq7pL2", "wzR9kT4m")
+  result = execute_task(_printing(tmp_path, f"connecting\npassword={pw}\ndone\n"), history)
+  assert result.status == "ok" and pw not in result.output_tail and f"password={MARK}" in result.output_tail
+  rows = history.recent()
+  assert pw not in repr(rows) and rows[0]["output_tail"] == result.output_tail
+
+
+def test_a_secret_cut_by_the_tail_is_masked_before_the_cut(history, tmp_path):
+  # Cut first, the tail started in the middle of the value: its last 7 characters, with no `password=` left in
+  # front of them, no longer looked like a secret.
+  pw = _fake("Xq7pL2", "wzR9kT4m")
+  after = "\n" + "." * (runner_module.OUTPUT_TAIL_CHARS - 7 - 1)
+  result = execute_task(_printing(tmp_path, "x" * 5000 + "\npassword=" + pw + after), history)
+  assert len(pw) == 14 and pw[-7:] not in result.output_tail
+  assert history.recent()[0]["output_tail"] == result.output_tail
+  # Only a window at the end of the output is masked, so an enormous output costs no more than a long one.
+  big = "x" * (runner_module.MASK_WINDOW_CHARS + 1000) + "\npassword=" + pw + "\ndone\n"
+  result = execute_task(_printing(tmp_path, big), history)
+  assert pw not in result.output_tail and f"password={MARK}" in result.output_tail
+
+
+def test_a_run_is_recorded_without_its_output_when_masking_fails(history, tmp_path, monkeypatch):
+  # An env file the scheduler cannot read made `clean` raise: the run was neither returned nor recorded.
+  pw = _fake("Xq7pL2", "wzR9kT4m")
+  env = tmp_path / "secrets.env"
+  env.write_text(f"DB_PASSWORD={pw}\n")
+  monkeypatch.setenv("AURA_CORE_ENV_FILE", str(env))
+  real_read = type(env).read_text
+
+  def unreadable(self, *args, **kwargs):
+    if self == env:
+      raise PermissionError(13, "Permission denied", str(self))
+    return real_read(self, *args, **kwargs)
+
+  monkeypatch.setattr(type(env), "read_text", unreadable)
+  result = execute_task(_printing(tmp_path, f"value {pw}\n"), history)
+  assert result.status == "ok" and pw not in result.output_tail and "PermissionError" in result.output_tail
+  assert history.recent()[0]["output_tail"] == result.output_tail
 
 
 def test_dependency_gate(history):

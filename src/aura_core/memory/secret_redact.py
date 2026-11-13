@@ -15,7 +15,9 @@ Two layers, both conservative:
    (`PGPASSWORD=... psql`, `sshpass -p`, `mysql -p...`, `curl -u <user>:<password>`,
    `echo ... | sudo -S`).
 
-`clean` applies both. Mask a text whole, before it is cut into chunks or
+`clean` applies both. `clean_record` applies it to a JSON-like record value by
+value and masks whole the fields whose name holds a credential (store
+metadata). Mask a text whole, before it is cut into chunks or
 extracts and before it is serialised: a token cut in two, or a `password=`
 whose quotes json.dumps has escaped, no longer has a recognisable shape.
 
@@ -39,11 +41,13 @@ _CREDENTIAL_NAME = re.compile(
 )
 # Field names that hold a credential, for records masked field by field (store metadata). Narrower than
 # _ASSIGNMENT_KEY on purpose: in a record, `key`, `sort_key` or `auth` are ordinary settings. The credential
-# word ends the name: `access_token` holds one, `token_count` does not.
+# word ends the name, plural included: `access_token` and `api_keys` hold one, `token_count` does not.
 _CREDENTIAL_FIELD = re.compile(
-  r"(?:^|_)(?:password|passwd|psswd|passphrase|pass|pwd|pw|secret|token|authorization|credentials?"
-  r"|(?:api|secret|access|private)_?key)$"
+  r"(?:^|_)(?:password|passwd|psswd|passphrase|pass|pwd|pw|secret|token|authorization|credential"
+  r"|(?:api|secret|access|private)_?key)s?$"
 )
+# A NUMBER under a name that ends with `tokens` (`max_tokens`, `input_tokens`) counts a model's tokens.
+_TOKEN_COUNTER = re.compile(r"(?:^|_)tokens$")
 # Upper-case names where the credential word is glued to another one: PGPASSWORD, MYSQLTOKEN, SSHPASS.
 _GLUED_NAME = r"[A-Z0-9_]{0,60}(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)|SSHPASS"
 _UNSET = frozenset({"none", "null", "true", "false"})
@@ -202,19 +206,54 @@ def clean(text: str) -> str:
   return redact(text)
 
 
+def _snake(name: str) -> str:
+  return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).lower().replace("-", "_").replace(".", "_")
+
+
 def credential_field(name: str) -> bool:
-  """True for a field name that holds a credential: `password`, `DB_PASSWORD`, `apiKey`, `PGPASSWORD`."""
+  """True for a field name that holds a credential: `password`, `DB_PASSWORD`, `apiKey`, `PGPASSWORD`,
+  and their plurals (`passwords`, `api_keys`)."""
   if re.fullmatch(_GLUED_NAME, name):
     return True
-  snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).lower().replace("-", "_").replace(".", "_")
-  return bool(_CREDENTIAL_FIELD.search(snake))
+  return bool(_CREDENTIAL_FIELD.search(_snake(name)))
 
 
-def secret_field(name: str, value: str) -> bool:
-  """True when a record field is to be masked whole: under a credential name, the value is the secret,
-  short or with spaces, unless it is a reference, a placeholder or an unset marker (`None`, `null`)."""
+def secret_field(name: str, value: str | int | float | bool | None) -> bool:
+  """True when a record field is to be masked whole.
+
+  Under a credential name the value is the secret: a string, short or with spaces, unless it is a
+  reference, a placeholder or an unset marker (`None`, `null`); a number too (`password: 12345678`),
+  except under a name that ends with `tokens`, a model's token counter (`max_tokens: 4096`). A bool or
+  None is never a secret.
+  """
+  if value is None or isinstance(value, bool) or not credential_field(name):
+    return False
+  if isinstance(value, (int, float)):
+    return not _TOKEN_COUNTER.search(_snake(name))
   value = value.strip()
-  return credential_field(name) and not _is_reference(value) and value.lower() not in _UNSET
+  return not _is_reference(value) and value.lower() not in _UNSET
+
+
+def clean_record(value, name: str = ""):
+  """Mask a JSON-like record (dicts, lists, plain values) field by field, before it is serialised.
+
+  Dumped first, quotes and newlines come out escaped and `{"api_key": v}` becomes `"api_key": "v"`: the
+  patterns no longer see a `name=value`. So each string is masked on its own (`clean`), then whole when its
+  field name holds a credential (`secret_field`). A credential name carries down: below `credentials` or
+  `api_keys`, every value is judged under that name, so `{"credentials": {"user": "bob"}}` is masked and
+  `{"tokens": {"input": 12}}` stays a counter. Below any other name, a value is judged under its own key, and
+  a list passes its name to its items.
+  """
+  if isinstance(value, dict):
+    inherited = name if credential_field(name) else ""
+    return {k: clean_record(v, inherited or str(k)) for k, v in value.items()}
+  if isinstance(value, list):
+    return [clean_record(v, name) for v in value]
+  if isinstance(value, str):
+    value = clean(value)
+  elif not isinstance(value, (int, float)):  # None, or a type json.loads does not produce: left as is
+    return value
+  return MARK if secret_field(name, value) else value
 
 
 def has_secret(text: str) -> bool:

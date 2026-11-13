@@ -9,7 +9,9 @@ Paths:
   semantic   vector k-NN only.
   hybrid     BM25 + vector fused by RRF (`SqliteVecStore.search_hybrid`).
   rerank     hybrid candidates re-ordered by a cross-encoder. Opt-in
-             (`--rerank`), downloads a model.
+             (`--rerank`), downloads a model. If the cross-encoder cannot
+             load or score, the path is reported unavailable, with no
+             figures, and the command exits with code 1.
 
 Embedders (`--embedder`):
   lexical    no embedder: only the fts path runs. Always works offline.
@@ -95,8 +97,55 @@ def pick_embedder(kind: str):
   return embedder, f"st:{embedder.model_name}"
 
 
+class _RerankFailed(Exception):
+  """The cross-encoder did not load or score: the rerank path gets no figures."""
+
+
+def _short_reason(exc: BaseException) -> str:
+  lines = str(exc).strip().splitlines()
+  return f"{type(exc).__name__}: {lines[0][:200]}" if lines else type(exc).__name__
+
+
+def _score_path(fn, questions: list[dict], qvecs: list) -> dict:
+  ranks = [first_gold_rank([r["id"] for r in fn(q["question"], v)], q["relevant"])
+           for q, v in zip(questions, qvecs, strict=True)]
+  per_kind = {}
+  for kind in sorted({q["kind"] for q in questions}):
+    sub = [r for r, q in zip(ranks, questions, strict=True) if q["kind"] == kind]
+    per_kind[kind] = {"n": len(sub), **score(sub)}
+  return {**score(ranks), "per_kind": per_kind, "ranks": {q["id"]: r for q, r in zip(questions, ranks, strict=True)}}
+
+
+def _score_rerank(store: SqliteVecStore, questions: list[dict], qvecs: list) -> dict:
+  """The rerank path, or {"unavailable": reason}.
+
+  The reranker is called with `strict=True`: its fail-safe answer, the hybrid
+  candidates unchanged, would otherwise be scored as a reranked list.
+  """
+  from aura_core.memory import reranker
+
+  if not reranker.available():
+    return {"unavailable": "sentence-transformers is not installed (pip install -e \".[st]\")"}
+
+  def fn(q, v):
+    candidates = store.search_hybrid(v, q, k=POOL, pool=POOL)
+    try:
+      return reranker.rerank(q, candidates, top_k=TOP_K, strict=True)
+    except Exception as exc:
+      raise _RerankFailed(f"{reranker.model_name()} did not load or score ({_short_reason(exc)})") from exc
+
+  try:
+    return _score_path(fn, questions, qvecs)
+  except _RerankFailed as exc:
+    return {"unavailable": str(exc)}
+
+
 def run(corpus: dict, truth: dict, embedder=None, *, rerank: bool = False) -> dict:
-  """Score every available path. Returns {path: {metrics, per_kind, ranks}}."""
+  """Score every available path. Returns {path: {metrics, per_kind, ranks}}.
+
+  The rerank path needs an embedder. When the cross-encoder cannot load or
+  score, it is {"rerank": {"unavailable": reason}}, never figures.
+  """
   problems = validate(corpus, truth)
   if problems:
     raise ValueError("invalid ground truth: " + "; ".join(problems))
@@ -112,21 +161,9 @@ def run(corpus: dict, truth: dict, embedder=None, *, rerank: bool = False) -> di
       if embedder:
         paths["semantic"] = lambda q, v: store.search(v, k=TOP_K)
         paths["hybrid"] = lambda q, v: store.search_hybrid(v, q, k=TOP_K, pool=POOL)
-        if rerank:
-          from aura_core.memory import reranker
-
-          paths["rerank"] = lambda q, v: reranker.rerank(
-            q, store.search_hybrid(v, q, k=POOL, pool=POOL), top_k=TOP_K)
-      out = {}
-      for name, fn in paths.items():
-        ranks = [first_gold_rank([r["id"] for r in fn(q["question"], v)], q["relevant"])
-                 for q, v in zip(questions, qvecs, strict=True)]
-        per_kind = {}
-        for kind in sorted({q["kind"] for q in questions}):
-          sub = [r for r, q in zip(ranks, questions, strict=True) if q["kind"] == kind]
-          per_kind[kind] = {"n": len(sub), **score(sub)}
-        out[name] = {**score(ranks), "per_kind": per_kind,
-                     "ranks": {q["id"]: r for q, r in zip(questions, ranks, strict=True)}}
+      out = {name: _score_path(fn, questions, qvecs) for name, fn in paths.items()}
+      if embedder and rerank:
+        out["rerank"] = _score_rerank(store, questions, qvecs)
       return out
     finally:
       store.close()
@@ -135,7 +172,8 @@ def run(corpus: dict, truth: dict, embedder=None, *, rerank: bool = False) -> di
 def main(argv: list[str] | None = None) -> int:
   ap = argparse.ArgumentParser(prog="aura-core-eval", description=__doc__.split("\n\n")[0])
   ap.add_argument("--embedder", choices=["auto", "lexical", "hashing", "st"], default="auto")
-  ap.add_argument("--rerank", action="store_true", help="also score the cross-encoder path (downloads a model)")
+  ap.add_argument("--rerank", action="store_true",
+                  help="also score the cross-encoder path (downloads a model; exit code 1 if it cannot be scored)")
   ap.add_argument("--corpus", help="corpus JSON (default: bundled synthetic corpus)")
   ap.add_argument("--truth", help="ground truth JSON (default: bundled)")
   ap.add_argument("--json", action="store_true", help="machine-readable output")
@@ -153,34 +191,46 @@ def main(argv: list[str] | None = None) -> int:
     print(f"warning: --rerank ignored, the {label} embedder has no vectors (use --embedder hashing or st)",
           file=sys.stderr)
   results = run(corpus, truth, embedder, rerank=args.rerank)
+  for name, r in results.items():
+    if "unavailable" in r:
+      print(f"warning: no figures for the {name} path, unavailable: {r['unavailable']}", file=sys.stderr)
 
   digest = hashlib.sha256(json.dumps(truth, sort_keys=True).encode()).hexdigest()[:10]
   header = {"embedder": label, "ground_truth_version": truth.get("version"), "ground_truth_sha": digest,
             "documents": len(corpus["documents"]), "questions": len(truth["questions"])}
   if args.json:
     print(json.dumps({**header, "results": results}, indent=2))
-    return 0
+  else:
+    _print_text(header, results, truth, misses=args.misses)
+  # Asked for and not produced is a failure, so a script or CI run does not read the missing line as a pass.
+  reranked = "rerank" in results and "unavailable" not in results["rerank"]
+  return 1 if args.rerank and not reranked else 0
 
+
+def _print_text(header: dict, results: dict, truth: dict, *, misses: bool) -> None:
   print(f"corpus: {header['documents']} docs | ground truth v{header['ground_truth_version']} "
-        f"({header['questions']} questions, sha {digest}) | embedder: {label}")
+        f"({header['questions']} questions, sha {header['ground_truth_sha']}) | embedder: {header['embedder']}")
   print(f"{'path':<10} {'recall@3':>9} {'MRR':>7} {'found@10':>9}")
   for name, r in results.items():
-    print(f"{name:<10} {r['recall@3']:>9.3f} {r['mrr']:>7.3f} {r['found']:>6}/{header['questions']}")
-  kinds = next(iter(results.values()))["per_kind"]
+    if "unavailable" in r:
+      print(f"{name:<10} unavailable: {r['unavailable']}")
+    else:
+      print(f"{name:<10} {r['recall@3']:>9.3f} {r['mrr']:>7.3f} {r['found']:>6}/{header['questions']}")
+  scored = {name: r for name, r in results.items() if "unavailable" not in r}  # fts always is
+  kinds = next(iter(scored.values()))["per_kind"]
   print("\nrecall@3 by question kind:")
   recall_key = f"recall@{RECALL_K}"
   titles = [f"{k} (n={v['n']})" for k, v in kinds.items()]
   print(f"{'path':<10} " + " ".join(f"{t:>18}" for t in titles))
-  for name, r in results.items():
+  for name, r in scored.items():
     print(f"{name:<10} " + " ".join(f"{r['per_kind'][k][recall_key]:>18.3f}" for k in kinds))
-  if args.misses:
+  if misses:
     by_id = {q["id"]: q for q in truth["questions"]}
-    for name, r in results.items():
+    for name, r in scored.items():
       missed = [qid for qid, rank in r["ranks"].items() if rank is None or rank > RECALL_K]
       print(f"\n{name}: {len(missed)} question(s) outside the top {RECALL_K}")
       for qid in missed:
         print(f"  {qid} [{by_id[qid]['kind']}] rank={r['ranks'][qid]}  {by_id[qid]['question']}")
-  return 0
 
 
 if __name__ == "__main__":

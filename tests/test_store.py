@@ -256,6 +256,51 @@ def test_a_credential_field_is_masked_whatever_its_value(store):
   assert {k: stored[k] for k in kept} == kept
 
 
+def test_plural_credential_fields_are_masked(store):
+  pw = _fake("Xq7pL2", "wzR9kT4m")
+  plural = {"passwords": pw, "secrets": pw, "api_keys": pw, "access_tokens": pw, "private_keys": pw,
+            "passphrases": "correct horse battery staple"}
+  kept = {"passage": "chapter two", "sort_keys": "title_asc", "keys": "notes/a.md"}
+  store.upsert([{"id": "m", "source": "s", "type": "topic", "content": "deploy notes",
+                 "metadata": {**plural, **kept}}])
+  stored = json.loads(_stored_metadata(store, "m"))
+  assert {k: stored[k] for k in plural} == dict.fromkeys(plural, MARK)
+  assert {k: stored[k] for k in kept} == kept
+
+
+def test_a_number_under_a_credential_field_is_masked(store):
+  # A model's token counter (a number under a name that ends with `tokens`) stays readable, a bool or null too.
+  numbers = {"password": 12345678, "api_key": 1234567890123, "secret": 0.5, "pin_passwords": 4321}
+  kept = {"max_tokens": 4096, "input_tokens": 12, "output_tokens": 30, "tokens": 7, "retries": 3,
+          "pwd": True, "client_secret": None}
+  store.upsert([{"id": "m", "source": "s", "type": "topic", "content": "deploy notes",
+                 "metadata": {**numbers, **kept}}])
+  raw = _stored_metadata(store, "m")
+  assert "12345678" not in raw and "1234567890123" not in raw
+  stored = json.loads(raw)
+  assert {k: stored[k] for k in numbers} == dict.fromkeys(numbers, MARK)
+  assert {k: stored[k] for k in kept} == kept
+
+
+def test_a_credential_name_carries_down_to_nested_values(store):
+  pw = _fake("Xq7pL2", "wzR9kT4m")
+  other = _fake("Lm3nB8", "vcX1zQ6r")
+  meta = {"passwords": {"db": pw, "mail": 12345678}, "credentials": {"user": "bob"}, "api_keys": [pw, other],
+          "vault": {"credentials": [{"user": "bob", "port": 5432}]}, "secret": {"value": "$DB_PASS"},
+          "tokens": {"input": 12, "output": 30}, "usage": {"input_tokens": 12},
+          "settings": {"retries": 3, "label": "plain words"}}
+  store.upsert([{"id": "m", "source": "s", "type": "topic", "content": "deploy notes", "metadata": meta}])
+  raw = _stored_metadata(store, "m")
+  assert pw not in raw and other not in raw and "bob" not in raw
+  stored = json.loads(raw)
+  assert stored["passwords"] == {"db": MARK, "mail": MARK} and stored["credentials"] == {"user": MARK}
+  assert stored["api_keys"] == [MARK, MARK] and stored["vault"] == {"credentials": [{"user": MARK, "port": MARK}]}
+  # A reference stays readable under a credential name, and token counters stay numbers.
+  assert stored["secret"] == {"value": "$DB_PASS"}
+  assert stored["tokens"] == {"input": 12, "output": 30} and stored["usage"] == {"input_tokens": 12}
+  assert stored["settings"] == {"retries": 3, "label": "plain words"}
+
+
 def test_the_embedder_only_sees_masked_text(store):
   token = _fake("ghp_", "A1b2C3d4E5f6G7h8I9j0K1l2")
   pw = _fake("Xq7pL2", "wzR9kT4m")

@@ -28,7 +28,7 @@ import sqlite_vec
 
 from aura_core.config import default_memory_db
 from aura_core.memory.embed_engine import DEFAULT_DIM, Embedder
-from aura_core.memory.secret_redact import MARK, clean, secret_field
+from aura_core.memory.secret_redact import clean, clean_record
 
 
 def _serialize_vec(vec: list[float]) -> bytes:
@@ -185,23 +185,6 @@ class SqliteVecStore:
   def _clean(self, text: str) -> str:
     return clean(text) if self.redact_secrets else text
 
-  def _clean_metadata(self, value, key: str = ""):
-    """Metadata masked value by value, before json.dumps.
-
-    Dumped first, quotes and newlines come out escaped and `{"api_key": v}`
-    becomes `"api_key": "v"`: the patterns no longer see a `name=value`. So a
-    string is masked on its own, then whole if its field name holds a
-    credential (`password`, `PGPASSWORD`; `sort_key` or `auth` stay readable).
-    """
-    if isinstance(value, dict):
-      return {k: self._clean_metadata(v, str(k)) for k, v in value.items()}
-    if isinstance(value, list):
-      return [self._clean_metadata(v, key) for v in value]
-    if not isinstance(value, str):
-      return value
-    value = self._clean(value)
-    return MARK if secret_field(key, value) else value
-
   def upsert(self, chunks: list[dict]) -> int:
     """Insert or replace chunks.
 
@@ -230,8 +213,9 @@ class SqliteVecStore:
         content = self._clean(c["content"])
         content_hash = c.get("content_hash") or _hash_content(content)
         metadata = c.get("metadata", {})
+        # Masked value by value before json.dumps escapes the quotes the patterns rely on (`clean_record`).
         if self.redact_secrets:  # plain JSON types first, so values json.dumps would stringify are masked too
-          metadata = self._clean_metadata(json.loads(json.dumps(metadata, default=str)))
+          metadata = clean_record(json.loads(json.dumps(metadata, default=str)))
         meta_json = self._clean(json.dumps(metadata, default=str, ensure_ascii=False))
         # RETURNING is required: cursor.lastrowid can still hold the rowid of a
         # previous INSERT when ON CONFLICT takes the UPDATE branch.

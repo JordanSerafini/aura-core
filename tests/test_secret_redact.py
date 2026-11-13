@@ -1,6 +1,14 @@
 import time
 
-from aura_core.memory.secret_redact import MARK, clean, has_secret, mask_env_values, redact
+from aura_core.memory.secret_redact import (
+  MARK,
+  clean,
+  credential_field,
+  has_secret,
+  mask_env_values,
+  redact,
+  secret_field,
+)
 
 
 def _fake(prefix: str, body: str) -> str:
@@ -160,3 +168,24 @@ def test_assignment_names_are_read_whole():
   assert redact(f"password={pw}-token:{pw} end") == f"password={MARK} end"
   for text in ("monkey=bananas", "tokenizer: default", "keyboard: azerty12"):
     assert redact(text) == text, text
+
+
+def test_plural_field_names_hold_credentials():
+  for name in ("passwords", "secrets", "api_keys", "access_tokens", "private_keys", "passphrases", "credentials",
+               "apiKeys", "DB_PASSWORDS", "tokens"):
+    assert credential_field(name), name
+  for name in ("passage", "token_count", "sort_keys", "keys", "bypass", "password_policies"):
+    assert not credential_field(name), name
+
+
+def test_secret_field_masks_numbers_but_not_token_counters():
+  for name, value in (("password", 12345678), ("api_key", 1234567890123), ("secret", 0.5), ("passwords", 42),
+                      ("token", 4096)):
+    assert secret_field(name, value), (name, value)
+  # A number under a name that ends with `tokens` counts a model's tokens. A bool or None is never a secret.
+  for name, value in (("max_tokens", 4096), ("input_tokens", 12), ("outputTokens", 30), ("tokens", 7),
+                      ("password", True), ("password", False), ("password", None), ("token_count", 125000)):
+    assert not secret_field(name, value), (name, value)
+  # Under a counter name, a string is still a secret; references and unset markers stay readable.
+  assert secret_field("tokens", _fake("ghp_", "A1b2C3d4E5f6G7h8I9j0K1l2")) and secret_field("passwords", "a b")
+  assert not secret_field("secret", "$DB_PASS") and not secret_field("password", "None")

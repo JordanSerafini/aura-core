@@ -4,6 +4,11 @@ Deliberately small. Tasks are shell commands; each run is recorded in a
 `task_runs` table (status, exit code, duration, output tail). There is no
 notification channel and no LLM call anywhere in this module.
 
+The output tail goes through `secret_redact.clean` before it is stored: the
+end of the output is masked first, then cut to its last OUTPUT_TAIL_CHARS
+characters, so a secret cut in two by the tail is still recognised. Pattern
+masking is a safety net, not a guarantee: keep secrets out of what tasks print.
+
 Security: the file is trusted configuration. Every task line is executed with
 `/bin/sh -c`. Never point this at a HEARTBEAT.md you did not write.
 
@@ -43,8 +48,13 @@ from aura_core.config import default_heartbeat_db
 from aura_core.heartbeat.adaptive import multiplier, next_state
 from aura_core.heartbeat.models import ScheduledTask, catch_up_seconds, command_stem
 from aura_core.heartbeat.parser import ParsedTasks, parse_heartbeat
+from aura_core.memory.secret_redact import clean
 
 OUTPUT_TAIL_CHARS = 2000
+# Only the end of the output is masked: communicate() keeps all of it in memory and the assignment masker loops
+# in Python. A secret shorter than about 62,000 characters that reaches into the last 2,000 lies wholly inside
+# this window (a PEM private key is about 3 KB).
+MASK_WINDOW_CHARS = 64_000
 KILL_DRAIN_SECONDS = 5
 RELOAD_JOB_ID = "__reload__"
 REPEATED_HOUR_WINDOW = timedelta(minutes=70)
@@ -162,6 +172,19 @@ def _drain_after_kill(proc: subprocess.Popen) -> str:
     return partial.decode(errors="replace") if isinstance(partial, bytes) else partial
 
 
+def masked_tail(output: str) -> str:
+  """The last OUTPUT_TAIL_CHARS characters of `output`, masked BEFORE the cut.
+
+  Cut first, a secret straddling the cut loses the `password=` that gives it
+  away. If masking itself fails (an unreadable `AURA_CORE_ENV_FILE`), the
+  output is dropped rather than stored unmasked, and the run is still recorded.
+  """
+  try:
+    return clean(output[-MASK_WINDOW_CHARS:])[-OUTPUT_TAIL_CHARS:]
+  except Exception as exc:
+    return f"[output not kept: masking failed ({type(exc).__name__})]"
+
+
 def in_repeated_hour(now_ts: float | None = None) -> bool:
   """True during the hour that the switch back to winter time makes happen twice.
 
@@ -190,9 +213,10 @@ def execute_task(task: ScheduledTask, history: RunHistory, *, allow_tokens: bool
   t0 = time.monotonic()
 
   def finish(status: str, code: int | None, output: str) -> RunResult:
-    result = RunResult(task.task_id, status, code, round(time.monotonic() - t0, 3),
-                       output[-OUTPUT_TAIL_CHARS:])
+    result = RunResult(task.task_id, status, code, round(time.monotonic() - t0, 3), masked_tail(output))
     history.record(task, started, result)
+    # The adaptive state keeps only a SHA-256 of the whole raw output, never the text: masked, a rotated
+    # secret would look like an unchanged output.
     if task.adaptive and not status.startswith("skipped"):
       history.save_adaptive(task.task_id, *next_state(task, adaptive, status == "ok", output, time.time()))
     return result
