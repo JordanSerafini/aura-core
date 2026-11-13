@@ -218,7 +218,12 @@ def test_a_missing_database_abstains_even_with_an_identifier(tmp_path):
   missing = tmp_path / "absent.db"
   for embedder in (None, EMB):
     assert prompt_selection("what happened in INC-4471 hydraulic hose", "s", db=missing, embedder=embedder) == []
+  timing = {}
+  assert prompt_selection("where are the lifejackets stored", "s", db=missing, timing=timing) == []
+  assert "fts_ms" in timing and "abstention" not in timing  # timed like a failed keyword search, as before
   assert not missing.exists()  # opened read only: nothing created
+  assert prompt_selection("where are the lifejackets stored", "s", db=None, embedder=EMB) == []
+  assert semantic_rows(None, "lifejackets stored", EMB, ("topic",), {}) == []
 
 
 def test_a_database_path_with_uri_characters_is_read(tmp_path):

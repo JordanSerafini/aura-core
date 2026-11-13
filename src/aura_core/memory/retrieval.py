@@ -156,7 +156,7 @@ def semantic_rows(db, prompt: str, embedder: "Callable[[str], list[float]] | Emb
   types BEFORE the k-NN), `[]` when the vector side is unavailable."""
   timing.update(embed_ms=0.0, knn_ms=0.0)
   types = list(types)
-  if embedder is None or not types:
+  if embedder is None or not types or db is None:
     return []
   t0 = time.perf_counter()
   try:
@@ -289,9 +289,10 @@ def prompt_selection(prompt: str, session_id: str, *, db,
   seen = seen if seen is not None else {}
   types = tuple(types)
   tokens = _tokens(prompt)
-  if len(tokens) < 2:
+  if len(tokens) < 2 or db is None:  # no database to read (None used to open a file named "None"): abstain
     return []
   marks, type_params = _in_clause(types)
+  t_fts = time.perf_counter()
   try:
     with contextlib.closing(_connect_ro(db)) as conn:
       if _unknown_identifier(conn, prompt, marks, type_params):
@@ -306,6 +307,8 @@ def prompt_selection(prompt: str, session_id: str, *, db,
       scores = rrf_scores([r[0] for r in fts_rows], [r[0] for r in sem_rows])
       mtimes = _mtimes(conn, list(scores))
   except sqlite3.Error:
+    if "abstention" not in timing:  # an unreadable database is timed like a failed keyword search, as before
+      timing.setdefault("fts_ms", (time.perf_counter() - t_fts) * 1000)
     return []
   rows = {r[0]: r for r in sem_rows} | {r[0]: r for r in fts_rows}  # the keyword snippet beats the vector head
   ordered = [rows[rid] for rid, _ in sorted(scores.items(), key=lambda kv: -kv[1])]
