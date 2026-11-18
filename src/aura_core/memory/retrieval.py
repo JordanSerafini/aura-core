@@ -139,6 +139,11 @@ def _fold(text: str) -> str:
   return "".join(c for c in unicodedata.normalize("NFKD", text.lower()) if not unicodedata.combining(c))
 
 
+def _as_types(types: str | Iterable[str]) -> tuple[str, ...]:
+  """One type given as a string is that type, as in `SqliteVecStore.search(filter_type=...)`, not its letters."""
+  return (types,) if isinstance(types, str) else tuple(types)
+
+
 def _in_clause(types: Iterable[str]) -> tuple[str, list[str]]:
   types = list(types)
   return "(" + ",".join("?" * len(types)) + ")", types
@@ -155,7 +160,7 @@ def semantic_rows(db, prompt: str, embedder: "Callable[[str], list[float]] | Emb
   """Top `(rowid, type, source, extract)` by vector similarity (`SqliteVecStore.search`, which filters the
   types BEFORE the k-NN), `[]` when the vector side is unavailable."""
   timing.update(embed_ms=0.0, knn_ms=0.0)
-  types = list(types)
+  types = list(_as_types(types))
   if embedder is None or not types or db is None:
     return []
   t0 = time.perf_counter()
@@ -287,7 +292,7 @@ def prompt_selection(prompt: str, session_id: str, *, db,
   """Return up to `limit` `(rowid, type, source, extract)` tuples, or `[]` to abstain."""
   timing = timing if timing is not None else {}
   seen = seen if seen is not None else {}
-  types = tuple(types)
+  types = _as_types(types)
   tokens = _tokens(prompt)
   if len(tokens) < 2 or db is None:  # no database to read (None used to open a file named "None"): abstain
     return []
